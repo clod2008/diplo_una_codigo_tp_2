@@ -1,659 +1,1438 @@
-// ENTRAR EN EL FRACTAL
-  // Pegale a la pelota con la raqueta y metela en el portal (el anillo que late).
-  // Cada portal te sumerge más adentro del Mandelbrot. Llegá al nivel final.
-  // Si la pelota toca el piso, perdés una vida.
+// ==========================================
+// FRACTAL ODYSSEY - ENTRAR EN EL MANDELBROT
+// Pegale a la pelota con la raqueta y metela en el portal.
+// La pelota cae y rebota contra la silueta fractal.
+// ==========================================
 
-  // ================================
-  // PARÁMETROS DE LA APP (todo lo ajustable vive acá, agrupado)
-  // ================================
-  let PARAMS = {
-    fractal: {
-      paso: 4,              // tamaño de bloque de muestreo (bajo = más nítido y más lento)
-      maxIterBase: 40,      // techo de iteraciones en el nivel 1
-      maxIterPerLevel: 25,  // cuánto sube el techo por cada nivel
-      maxIterCap: 140,      // techo absoluto de iteraciones
+// Paletas de color del fractal
+const PALETTES = {
+  cyberpunk: {
+    name: "Cyberpunk",
+    color: "#50dcff",
+    edgeCol: [80, 240, 255],
+    edgeGlow: [255, 60, 220],
+    calc: (ratio, px, py, spd) => {
+      let r = (Math.sin(ratio * 7 + px + spd) + 1) * 115;
+      let g = (Math.sin(ratio * 5 + py) + 1) * 85;
+      let b = 90 + ratio * 165;
+      return [r, g, b];
     },
-    zoom: {
-      zoomPerLevel: 60,     // cuánto zoom mete cada portal
-      diveFrames: 160,      // duración (en frames) de la zambullida
-    },
-    edge: {
-      minVariance: 60,      // detalle mínimo (varianza de iteraciones) exigido cerca del centro
-      driftStrength: 0.25,  // qué tan fuerte corrige la cámara por frame hacia el borde
-      searchRadius: 14,     // radio de búsqueda (en bloques) de una zona con detalle
-    },
-    ball: {
-      ballR: 12,
-      gravity: 0.1,
-      friction: 0.999,
-      maxSpeed: 14,
-    },
-    racket: {
-      batR: 24,
-    },
-    portal: {
-      portalR: 22,
-    },
-    game: {
-      finalLevel: 5,
-      startLives: 3,
-    },
-  };
-
-  // ================================
-  // ESTADO (no son parámetros: cambian solos mientras juega)
-  // ================================
-  let fractalImage;
-  let cols, rows;
-  let iters;              // cache de iteraciones por bloque
-  let maxIterations;      // techo activo (interpola durante la zambullida)
-
-  let viewX = -0.5;
-  let viewY = 0;
-  let viewScale;          // unidades complejas por píxel
-
-  let ballX, ballY, ballVx, ballVy;
-  let swing = 0;
-
-  let portalX, portalY;   // en pantalla
-
-  let level = 1;
-  let lives = 3;
-  let state = "jugando";  // "jugando" | "entrando" | "ganaste" | "perdiste"
-  let flash = 0;
-
-  let diveT = 0;
-  let dive = {};
-
-  function setup() {
-    createCanvas(600, 400);
-    pixelDensity(1);
-    fractalImage = createImage(width, height);
-    resizeFractalBuffers();
-    textFont("sans-serif");
-    buildSliderPanel();
-    resetGame();
-  }
-
-  function resizeFractalBuffers() {
-    cols = ceil(width / PARAMS.fractal.paso);
-    rows = ceil(height / PARAMS.fractal.paso);
-    iters = new Int16Array(cols * rows);
-  }
-
-  function iterCapForLevel(lvl) {
-    return min(
-      PARAMS.fractal.maxIterBase + (lvl - 1) * PARAMS.fractal.maxIterPerLevel,
-      PARAMS.fractal.maxIterCap
-    );
-  }
-
-  function resetGame() {
-    level = 1;
-    lives = PARAMS.game.startLives;
-    viewX = -0.5;
-    viewY = 0;
-    viewScale = 3.5 / width;
-    maxIterations = iterCapForLevel(level);
-    state = "jugando";
-    settleView();
-    pickPortal();
-    resetBall();
-  }
-
-  function resetBall() {
-    ballX = width / 2;
-    ballY = 40;
-    ballVx = random(-2, 2);
-    ballVy = 0;
-  }
-
-  // asienta la vista sobre una zona con detalle antes de mostrarla,
-  // muestreando puntos sueltos (liviano) en vez de recalcular todo el canvas
-  function settleView() {
-    for (let k = 0; k < 8; k++) {
-      if (!driftViewLite()) break;
+    core: (ratio, px, py, spd) => {
+      let r = (Math.sin(ratio * 4 + px + spd) + 1) * 55 + 15;
+      let g = (Math.sin(ratio * 3 + py) + 1) * 45 + 15;
+      let b = 50 + ratio * 80;
+      return [r, g, b];
     }
-    computeFractal();
-  }
-
-  function driftViewLite() {
-    let radius = 4;
-    let paso = PARAMS.fractal.paso;
-    let step = paso * 2;
-    let n = 0, sum = 0, sumSq = 0;
-    let samples = [];
-
-    for (let dj = -radius; dj <= radius; dj++) {
-      for (let di = -radius; di <= radius; di++) {
-        let ca = viewX + di * step * viewScale;
-        let cb = viewY + dj * step * viewScale;
-        let v = mandel(ca, cb);
-        samples.push({ di: di, dj: dj, v: v });
-        sum += v;
-        sumSq += v * v;
-        n++;
-      }
+  },
+  fuego: {
+    name: "Fuego Cósmico",
+    color: "#ff7a29",
+    edgeCol: [255, 230, 80],
+    edgeGlow: [255, 70, 20],
+    calc: (ratio, px, py, spd) => {
+      let r = 90 + ratio * 165;
+      let g = (Math.sin(ratio * 5 + py + spd) + 1) * 85;
+      let b = (Math.sin(ratio * 2 + px) + 1) * 30;
+      return [r, g, b];
+    },
+    core: (ratio, px, py, spd) => {
+      let r = (Math.sin(ratio * 3 + px + spd) + 1) * 50 + 20;
+      let g = (Math.sin(ratio * 2 + py) + 1) * 25 + 10;
+      let b = 15;
+      return [r, g, b];
     }
-
-    let mean = sum / n;
-    let variance = sumSq / n - mean * mean;
-    if (variance >= PARAMS.edge.minVariance) return false;
-
-    let best = null;
-    let bestScore = -1;
-    for (let s of samples) {
-      let score = Math.abs(s.v - mean);
-      if (score > bestScore) {
-        bestScore = score;
-        best = s;
-      }
+  },
+  oceano: {
+    name: "Océano Abisal",
+    color: "#38bdf8",
+    edgeCol: [50, 255, 230],
+    edgeGlow: [30, 150, 255],
+    calc: (ratio, px, py, spd) => {
+      let r = (Math.sin(ratio * 3 + px) + 1) * 35;
+      let g = 60 + (Math.sin(ratio * 5 + py + spd) + 1) * 85;
+      let b = 110 + ratio * 145;
+      return [r, g, b];
+    },
+    core: (ratio, px, py, spd) => {
+      let r = 10;
+      let g = (Math.sin(ratio * 3 + py) + 1) * 35 + 15;
+      let b = 40 + ratio * 60;
+      return [r, g, b];
     }
-    if (!best) return false;
-
-    let dx = best.di * step * viewScale;
-    let dy = best.dj * step * viewScale;
-    viewX += dx * PARAMS.edge.driftStrength;
-    viewY += dy * PARAMS.edge.driftStrength;
-    return true;
-  }
-
-  // ---------- LOOP PRINCIPAL ----------
-
-  function draw() {
-    if (state === "jugando") {
-      hitBall();
-      updateBall();
-      checkPortal();
-    } else if (state === "entrando") {
-      updateDive();
+  },
+  esmeralda: {
+    name: "Matrix Neón",
+    color: "#4ade80",
+    edgeCol: [110, 255, 140],
+    edgeGlow: [40, 220, 80],
+    calc: (ratio, px, py, spd) => {
+      let r = (Math.sin(ratio * 2 + px) + 1) * 30;
+      let g = 80 + ratio * 175;
+      let b = (Math.sin(ratio * 4 + py + spd) + 1) * 50;
+      return [r, g, b];
+    },
+    core: (ratio, px, py, spd) => {
+      let r = 12;
+      let g = (Math.sin(ratio * 3 + py + spd) + 1) * 45 + 20;
+      let b = 20;
+      return [r, g, b];
     }
-
-    paintFractal();
-    image(fractalImage, 0, 0);
-
-    if (state === "jugando") drawPortal();
-    if (state === "jugando" || state === "perdiste") drawBall(1);
-    if (state === "entrando") drawBall(1 - diveT / PARAMS.zoom.diveFrames);
-    drawRacket(mouseX, mouseY);
-    drawHUD();
-
-    if (flash > 0) {
-      noStroke();
-      fill(255, 0, 0, flash);
-      rect(0, 0, width, height);
-      flash -= 8;
+  },
+  sunset: {
+    name: "Sunset Ultravioleta",
+    color: "#f43f5e",
+    edgeCol: [255, 210, 90],
+    edgeGlow: [230, 40, 150],
+    calc: (ratio, px, py, spd) => {
+      let r = 110 + (Math.sin(ratio * 4 + px + spd) + 1) * 70;
+      let g = (Math.sin(ratio * 3 + py) + 1) * 60;
+      let b = 100 + (Math.sin(ratio * 5 + spd) + 1) * 75;
+      return [r, g, b];
+    },
+    core: (ratio, px, py, spd) => {
+      let r = (Math.sin(ratio * 3 + px) + 1) * 40 + 20;
+      let g = 15;
+      let b = (Math.sin(ratio * 2 + py + spd) + 1) * 40 + 15;
+      return [r, g, b];
     }
-
-    if (state === "ganaste" || state === "perdiste") drawEndScreen();
-  }
-
-  // ---------- FRACTAL ----------
-
-  function computeFractal() {
-    let paso = PARAMS.fractal.paso;
-    for (let j = 0; j < rows; j++) {
-      let cb = viewY + (j * paso - height / 2) * viewScale;
-      for (let i = 0; i < cols; i++) {
-        let ca = viewX + (i * paso - width / 2) * viewScale;
-        iters[i + j * cols] = mandel(ca, cb);
-      }
+  },
+  cuantico: {
+    name: "Cuántico Polar",
+    color: "#e2e8f0",
+    edgeCol: [220, 245, 255],
+    edgeGlow: [100, 200, 255],
+    calc: (ratio, px, py, spd) => {
+      let val = 40 + ratio * 215;
+      let tint = (Math.sin(ratio * 6 + px + spd) + 1) * 18;
+      return [val, val + tint * 0.4, val + tint];
+    },
+    core: (ratio, px, py, spd) => {
+      let val = 15 + ratio * 55;
+      return [val, val, val + 15];
     }
   }
+};
 
-  function mandel(ca, cb) {
-    let a = ca;
-    let b = cb;
-    let n = 0;
-    while (n < maxIterations) {
-      let aa = a * a - b * b;
-      let bb = 2 * a * b;
-      a = aa + ca;
-      b = bb + cb;
-      if (a * a + b * b > 16) break;
+const PALETTE_KEYS = Object.keys(PALETTES);
+
+// ================================
+// PARÁMETROS DE LA APP
+// ================================
+let PARAMS = {
+  fractal: {
+    paso: 4,              // resolución (tamaño de bloque de muestreo)
+    maxIterBase: 50,      // iteraciones en el nivel 1
+    maxIterPerLevel: 25,  // aumento de iteraciones por nivel
+    maxIterCap: 160,      // techo de iteraciones
+    solidThreshold: 0.8,  // porcentaje de iteraciones que define terreno sólido
+    palette: "cyberpunk", // paleta activa
+  },
+  zoom: {
+    zoomPerLevel: 60,     // aumento de zoom por portal
+    diveFrames: 160,      // duración en frames de la inmersión
+  },
+  edge: {
+    minVariance: 60,      // detalle mínimo exigido para asentar la vista
+    driftStrength: 0.25,  // fuerza de corrección hacia el borde
+    searchRadius: 16,     // radio de búsqueda de detalle
+  },
+  ball: {
+    ballR: 12,
+    gravity: 0.12,
+    friction: 0.999,
+    maxSpeed: 15,
+    bounciness: 0.8,      // rebote en los bordes del fractal
+  },
+  racket: {
+    batR: 26,
+  },
+  portal: {
+    portalR: 24,
+  },
+  game: {
+    finalLevel: 5,
+    startLives: 3,
+  },
+};
+
+// Coordenadas iniciales cerca del borde (Seahorse Valley / Elephant Valley)
+const START_VALLEY_X = -0.748;
+const START_VALLEY_Y = 0.105;
+
+// ================================
+// ESTADO EN TIEMPO REAL
+// ================================
+let fractalImage;
+let cols, rows;
+let iters;
+let maxIterations;
+
+let viewX = START_VALLEY_X;
+let viewY = START_VALLEY_Y;
+let viewScale;
+
+let ballX, ballY, ballVx, ballVy;
+let swing = 0;
+
+let portalX, portalY;
+
+let level = 1;
+let lives = 3;
+let state = "jugando"; // "jugando" | "entrando" | "ganaste" | "perdiste"
+let flash = 0;
+
+let diveT = 0;
+let dive = {};
+
+let bounceEffects = [];
+let audioCtx = null;
+let isPanelVisible = false;
+
+// Audio seguro con Web Audio API
+function getAudioContextSafe() {
+  if (!audioCtx && (window.AudioContext || window.webkitAudioContext)) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (audioCtx && audioCtx.state === "suspended") {
+    audioCtx.resume();
+  }
+  return audioCtx;
+}
+
+function playBounceSound(speed) {
+  let ctx = getAudioContextSafe();
+  if (!ctx || ctx.state !== "running") return;
+  try {
+    let now = ctx.currentTime;
+    let osc = ctx.createOscillator();
+    let gain = ctx.createGain();
+    let freq = map(constrain(speed, 1, 15), 1, 15, 300, 720);
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(freq, now);
+    osc.frequency.exponentialRampToValueAtTime(freq * 0.45, now + 0.08);
+
+    gain.gain.setValueAtTime(0.1, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.08);
+  } catch (e) {
+    // Silencioso ante suspensión de audio del navegador
+  }
+}
+
+// ================================
+// SETUP Y RESIZE FULLSCREEN
+// ================================
+function setup() {
+  createCanvas(windowWidth, windowHeight);
+  pixelDensity(1);
+  textFont("Outfit, sans-serif");
+  resizeFractalBuffers();
+  buildSliderPanel();
+  resetGame();
+}
+
+function windowResized() {
+  resizeCanvas(windowWidth, windowHeight);
+  resizeFractalBuffers();
+  computeFractal();
+}
+
+function resizeFractalBuffers() {
+  let paso = PARAMS.fractal.paso;
+  cols = ceil(width / paso);
+  rows = ceil(height / paso);
+  iters = new Int16Array(cols * rows);
+  // Imagen de resolución interna coincidente con cols/rows para máxima velocidad
+  fractalImage = createImage(cols, rows);
+}
+
+function iterCapForLevel(lvl) {
+  return min(
+    PARAMS.fractal.maxIterBase + (lvl - 1) * PARAMS.fractal.maxIterPerLevel,
+    PARAMS.fractal.maxIterCap
+  );
+}
+
+function resetGame() {
+  level = 1;
+  lives = PARAMS.game.startLives;
+  viewX = START_VALLEY_X;
+  viewY = START_VALLEY_Y;
+  // Zoom inicial cercano al borde para alta riqueza visual desde el nivel 1
+  viewScale = 0.55 / min(width, height);
+  maxIterations = iterCapForLevel(level);
+  state = "jugando";
+  settleView();
+  resetBall();
+  pickPortal();
+}
+
+// Asienta la vista cerca del borde
+function settleView() {
+  for (let k = 0; k < 12; k++) {
+    if (!driftViewLite()) break;
+  }
+  computeFractal();
+}
+
+function driftViewLite() {
+  let radius = 5;
+  let paso = PARAMS.fractal.paso;
+  let step = paso * 2;
+  let n = 0, sum = 0, sumSq = 0;
+  let samples = [];
+
+  for (let dj = -radius; dj <= radius; dj++) {
+    for (let di = -radius; di <= radius; di++) {
+      let ca = viewX + di * step * viewScale;
+      let cb = viewY + dj * step * viewScale;
+      let v = mandel(ca, cb);
+      samples.push({ di: di, dj: dj, v: v });
+      sum += v;
+      sumSq += v * v;
       n++;
     }
-    return n;
   }
 
-  function paintFractal() {
-    let paso = PARAMS.fractal.paso;
-    fractalImage.loadPixels();
-    let pix = fractalImage.pixels;
-    let speedFactor = map(abs(ballVx) + abs(ballVy), 0, 12, 0, 1);
-    let px = ballX * 0.01 + level * 0.7;
-    let py = ballY * 0.01;
+  let mean = sum / n;
+  let variance = sumSq / n - mean * mean;
+  if (variance >= PARAMS.edge.minVariance) return false;
 
-    for (let j = 0; j < rows; j++) {
-      for (let i = 0; i < cols; i++) {
-        let n = iters[i + j * cols];
-        let bright = n === maxIterations ? 0 : (n / maxIterations) * 255;
+  let best = null;
+  let bestScore = -1;
+  for (let s of samples) {
+    let score = Math.abs(s.v - mean);
+    if (score > bestScore) {
+      bestScore = score;
+      best = s;
+    }
+  }
+  if (!best) return false;
 
-        let r = (Math.sin(bright * 0.05 + px + speedFactor) + 1) * 127.5;
-        let g = (Math.sin(bright * 0.03 + py) + 1) * 127.5;
-        let bl = 50 + (bright / 255) * 205;
+  let dx = best.di * step * viewScale;
+  let dy = best.dj * step * viewScale;
+  viewX += dx * PARAMS.edge.driftStrength;
+  viewY += dy * PARAMS.edge.driftStrength;
+  return true;
+}
 
-        let x0 = i * paso;
-        let y0 = j * paso;
-        for (let dy = 0; dy < paso && y0 + dy < height; dy++) {
-          let idx = (x0 + (y0 + dy) * width) * 4;
-          for (let dx = 0; dx < paso && x0 + dx < width; dx++) {
-            pix[idx] = r;
-            pix[idx + 1] = g;
-            pix[idx + 2] = bl;
-            pix[idx + 3] = 255;
-            idx += 4;
+// ================================
+// DETECCIÓN, PREVENCIÓN Y CAÍDA EN BORDES
+// ================================
+function isFractalSolid(px, py) {
+  let paso = PARAMS.fractal.paso;
+  let i = floor(px / paso);
+  let j = floor(py / paso);
+  if (i < 0 || i >= cols || j < 0 || j >= rows) return false;
+  let n = iters[i + j * cols];
+  let solidLimit = maxIterations * PARAMS.fractal.solidThreshold;
+  return n >= solidLimit;
+}
+
+function getFractalVal(px, py) {
+  let paso = PARAMS.fractal.paso;
+  let i = constrain(floor(px / paso), 0, cols - 1);
+  let j = constrain(floor(py / paso), 0, rows - 1);
+  return iters[i + j * cols];
+}
+
+// Verifica que un círculo con centro (cx, cy) y radio r esté 100% en espacio libre (fuera del conjunto)
+function isCircleClear(cx, cy, r) {
+  if (cx - r < 10 || cx + r > width - 10 || cy - r < 10 || cy + r > height - 10) return false;
+  if (isFractalSolid(cx, cy)) return false;
+  for (let a = 0; a < TWO_PI; a += PI / 6) {
+    let cosA = cos(a);
+    let sinA = sin(a);
+    if (isFractalSolid(cx + cosA * r, cy + sinA * r)) return false;
+    if (isFractalSolid(cx + cosA * (r * 0.5), cy + sinA * (r * 0.5))) return false;
+  }
+  return true;
+}
+
+// Encuentra el punto despejado más cercano en caso de quedar atrapado dentro del fractal
+function findNearestFreePoint(startX, startY, clearR) {
+  let paso = PARAMS.fractal.paso;
+  let rTest = clearR || (PARAMS.ball.ballR + 6);
+  let maxR = ceil(350 / paso);
+
+  for (let r = 1; r <= maxR; r++) {
+    for (let dj = -r; dj <= r; dj++) {
+      for (let di = -r; di <= r; di++) {
+        if (max(abs(di), abs(dj)) !== r) continue;
+        let px = startX + di * paso;
+        let py = startY + dj * paso;
+        if (px >= 40 && px <= width - 40 && py >= 40 && py <= height - 60) {
+          if (isCircleClear(px, py, rTest)) {
+            return { x: px, y: py };
           }
         }
       }
     }
-    fractalImage.updatePixels();
   }
+  return { x: width / 2, y: height / 2 };
+}
 
-  // ---------- CÁMARA SIEMPRE SOBRE EL BORDE (durante la zambullida) ----------
+// Encuentra una brecha vertical de aire libre con una superficie fractal debajo
+// garantizando que la pelota NUNCA arranque dentro del conjunto
+function findEdgeDropPoint() {
+  let paso = PARAMS.fractal.paso;
+  let ballR = PARAMS.ball.ballR;
+  let safeR = ballR + 8;
+  let candidates = [];
+  let minI = floor(80 / paso);
+  let maxI = floor((width - 80) / paso);
 
-  function localVariance(ci, cj, radius) {
-    let count = 0, sum = 0, sumSq = 0;
-    for (let dj = -radius; dj <= radius; dj++) {
-      let j = cj + dj;
-      if (j < 0 || j >= rows) continue;
-      for (let di = -radius; di <= radius; di++) {
-        let i = ci + di;
-        if (i < 0 || i >= cols) continue;
-        let n = iters[i + j * cols];
-        sum += n;
-        sumSq += n * n;
-        count++;
-      }
-    }
-    if (count === 0) return 0;
-    let mean = sum / count;
-    return sumSq / count - mean * mean;
-  }
+  for (let i = minI; i < maxI; i += 2) {
+    let x = i * paso + paso / 2;
+    let inAir = false;
+    let airStartY = 0;
 
-  function findEdgeBlock(fromI, fromJ, maxRadius) {
-    let needed = PARAMS.edge.minVariance;
-    for (let r = 1; r <= maxRadius; r++) {
-      for (let dj = -r; dj <= r; dj++) {
-        for (let di = -r; di <= r; di++) {
-          if (max(abs(di), abs(dj)) !== r) continue;
-          let i = fromI + di;
-          let j = fromJ + dj;
-          if (i < 0 || i >= cols || j < 0 || j >= rows) continue;
-          if (localVariance(i, j, 2) >= needed) return { i: i, j: j };
+    for (let j = floor(40 / paso); j < floor((height - 70) / paso); j++) {
+      let y = j * paso + paso / 2;
+      let solid = isFractalSolid(x, y);
+
+      if (!solid) {
+        if (!inAir) {
+          inAir = true;
+          airStartY = y;
+        }
+      } else {
+        if (inAir) {
+          // Fin de la brecha de aire: se topa con la superficie fractal en y
+          let airGap = y - airStartY;
+          // Se requiere suficiente espacio de caída despejada
+          if (airGap >= 85) {
+            // El spawn se sitúa en la parte superior del aire libre, con espacio seguro respecto al techo
+            let spawnY = airStartY + safeR + 15;
+            // Confirmar que todo el volumen de la pelota esté en aire libre
+            if (isCircleClear(x, spawnY, safeR)) {
+              candidates.push({
+                x: x,
+                y: spawnY,
+                targetY: y,
+                airGap: airGap,
+              });
+            }
+          }
+          inAir = false;
         }
       }
     }
-    return null;
   }
 
-  function enforceEdgeFraming() {
-    let ci = floor(cols / 2);
-    let cj = floor(rows / 2);
-    if (localVariance(ci, cj, 3) >= PARAMS.edge.minVariance) return;
-
-    let found = findEdgeBlock(ci, cj, PARAMS.edge.searchRadius);
-    if (!found) return;
-
-    let paso = PARAMS.fractal.paso;
-    let dx = (found.i - ci) * paso * viewScale;
-    let dy = (found.j - cj) * paso * viewScale;
-
-    viewX += dx * PARAMS.edge.driftStrength;
-    viewY += dy * PARAMS.edge.driftStrength;
+  if (candidates.length > 0) {
+    // Ordenar para favorecer caídas amplias y despejadas
+    candidates.sort((a, b) => b.airGap - a.airGap);
+    let topCount = min(candidates.length, 5);
+    return candidates[floor(random(topCount))];
   }
 
-  // ---------- PORTAL ----------
+  // Respaldo de seguridad en caso de no hallar brecha en las columnas muestreadas
+  for (let tries = 0; tries < 40; tries++) {
+    let rx = random(100, width - 100);
+    let ry = random(60, height * 0.45);
+    if (isCircleClear(rx, ry, safeR + 10)) {
+      return { x: rx, y: ry, targetY: height * 0.7 };
+    }
+  }
 
-  function pickPortal() {
-    let paso = PARAMS.fractal.paso;
-    let candidates = [];
-    let minN = maxIterations * 0.5;
-    for (let j = floor(60 / paso); j < floor((height - 120) / paso); j += 2) {
-      for (let i = floor(60 / paso); i < floor((width - 60) / paso); i += 2) {
-        let n = iters[i + j * cols];
-        if (n >= minN && n < maxIterations) candidates.push([i, j]);
+  let free = findNearestFreePoint(width / 2, height / 3, safeR);
+  return { x: free.x, y: free.y, targetY: height * 0.7 };
+}
+
+function resetBall() {
+  let drop = findEdgeDropPoint();
+  ballX = drop.x;
+  ballY = drop.y;
+  ballVx = random(-0.2, 0.2); // caída recta sobre el borde
+  ballVy = 0.8;                 // impulso inicial hacia abajo
+
+  // Verificación estricta anti-atasco: jamás arrancar dentro del conjunto
+  if (!isCircleClear(ballX, ballY, PARAMS.ball.ballR + 4)) {
+    let free = findNearestFreePoint(ballX, ballY, PARAMS.ball.ballR + 6);
+    ballX = free.x;
+    ballY = free.y;
+  }
+
+  spawnDropIndicator(ballX, ballY, drop.targetY);
+}
+
+// ================================
+// LOOP PRINCIPAL (DRAW)
+// ================================
+function draw() {
+  if (state === "jugando") {
+    hitBall();
+    updateBall();
+    checkPortal();
+  } else if (state === "entrando") {
+    updateDive();
+  }
+
+  paintFractal();
+  // Escalado acelerado por GPU en pantalla completa
+  image(fractalImage, 0, 0, width, height);
+
+  updateAndDrawBounceEffects();
+
+  if (state === "jugando") drawPortal();
+  if (state === "jugando" || state === "perdiste") drawBall(1);
+  if (state === "entrando") drawBall(1 - diveT / PARAMS.zoom.diveFrames);
+
+  drawRacket(mouseX, mouseY);
+  drawHUD();
+
+  if (flash > 0) {
+    noStroke();
+    fill(255, 0, 0, flash);
+    rect(0, 0, width, height);
+    flash -= 8;
+  }
+
+  if (state === "ganaste" || state === "perdiste") drawEndScreen();
+}
+
+// ================================
+// CÓMPUTO Y PINTADO DEL FRACTAL
+// ================================
+function computeFractal() {
+  let paso = PARAMS.fractal.paso;
+  for (let j = 0; j < rows; j++) {
+    let cb = viewY + (j * paso - height / 2) * viewScale;
+    let rowIdx = j * cols;
+    for (let i = 0; i < cols; i++) {
+      let ca = viewX + (i * paso - width / 2) * viewScale;
+      iters[i + rowIdx] = mandel(ca, cb);
+    }
+  }
+}
+
+function mandel(ca, cb) {
+  let a = ca;
+  let b = cb;
+  let n = 0;
+  while (n < maxIterations) {
+    let aa = a * a - b * b;
+    let bb = 2 * a * b;
+    a = aa + ca;
+    b = bb + cb;
+    if (a * a + b * b > 16) break;
+    n++;
+  }
+  return n;
+}
+
+function paintFractal() {
+  fractalImage.loadPixels();
+  let pix = fractalImage.pixels;
+  let speedFactor = map(abs(ballVx) + abs(ballVy), 0, 15, 0, 1);
+  let px = ballX * 0.008 + level * 0.7;
+  let py = ballY * 0.008;
+  let solidLimit = maxIterations * PARAMS.fractal.solidThreshold;
+  let pal = PALETTES[PARAMS.fractal.palette] || PALETTES.cyberpunk;
+
+  for (let j = 0; j < rows; j++) {
+    let rowIdx = j * cols;
+    let prevRowIdx = (j - 1) * cols;
+    let nextRowIdx = (j + 1) * cols;
+
+    for (let i = 0; i < cols; i++) {
+      let n = iters[i + rowIdx];
+      let isSolid = n >= solidLimit;
+
+      // Detección ágil de contorno del terreno sólido
+      let isEdge = false;
+      if (isSolid) {
+        if (
+          i === 0 || i === cols - 1 || j === 0 || j === rows - 1 ||
+          iters[(i + 1) + rowIdx] < solidLimit ||
+          iters[(i - 1) + rowIdx] < solidLimit ||
+          (j > 0 && iters[i + prevRowIdx] < solidLimit) ||
+          (j < rows - 1 && iters[i + nextRowIdx] < solidLimit)
+        ) {
+          isEdge = true;
+        }
+      }
+
+      let ratio = n / maxIterations;
+      let r, g, bl;
+
+      if (isEdge) {
+        let edgePulse = sin(frameCount * 0.08 + (i + j) * 0.14) * 0.5 + 0.5;
+        r = lerp(pal.edgeCol[0], pal.edgeGlow[0], edgePulse);
+        g = lerp(pal.edgeCol[1], pal.edgeGlow[1], edgePulse);
+        bl = lerp(pal.edgeCol[2], pal.edgeGlow[2], edgePulse);
+      } else if (isSolid) {
+        let core = pal.core(ratio, px, py, speedFactor);
+        r = core[0];
+        g = core[1];
+        bl = core[2];
+      } else {
+        let col = pal.calc(ratio, px, py, speedFactor);
+        r = col[0];
+        g = col[1];
+        bl = col[2];
+      }
+
+      let idx = (i + rowIdx) * 4;
+      pix[idx] = r;
+      pix[idx + 1] = g;
+      pix[idx + 2] = bl;
+      pix[idx + 3] = 255;
+    }
+  }
+  fractalImage.updatePixels();
+}
+
+// Encuadre en el borde durante la zambullida
+function localVariance(ci, cj, radius) {
+  let count = 0, sum = 0, sumSq = 0;
+  for (let dj = -radius; dj <= radius; dj++) {
+    let j = cj + dj;
+    if (j < 0 || j >= rows) continue;
+    let rowIdx = j * cols;
+    for (let di = -radius; di <= radius; di++) {
+      let i = ci + di;
+      if (i < 0 || i >= cols) continue;
+      let n = iters[i + rowIdx];
+      sum += n;
+      sumSq += n * n;
+      count++;
+    }
+  }
+  if (count === 0) return 0;
+  let mean = sum / count;
+  return sumSq / count - mean * mean;
+}
+
+function findEdgeBlock(fromI, fromJ, maxRadius) {
+  let needed = PARAMS.edge.minVariance;
+  for (let r = 1; r <= maxRadius; r++) {
+    for (let dj = -r; dj <= r; dj++) {
+      for (let di = -r; di <= r; di++) {
+        if (max(abs(di), abs(dj)) !== r) continue;
+        let i = fromI + di;
+        let j = fromJ + dj;
+        if (i < 0 || i >= cols || j < 0 || j >= rows) continue;
+        if (localVariance(i, j, 2) >= needed) return { i: i, j: j };
       }
     }
-    if (candidates.length > 0) {
-      let c = random(candidates);
-      portalX = c[0] * paso + paso / 2;
-      portalY = c[1] * paso + paso / 2;
-    } else {
-      portalX = width / 2 + random(-150, 150);
-      portalY = height / 2 + random(-80, 40);
-    }
   }
+  return null;
+}
 
-  function drawPortal() {
-    let portalR = PARAMS.portal.portalR;
-    let pulse = sin(frameCount * 0.12);
-    push();
-    translate(portalX, portalY);
-    noFill();
-    for (let k = 3; k > 0; k--) {
-      stroke(255, 255, 255, 60 + 50 * k);
-      strokeWeight(k * 1.5);
-      circle(0, 0, portalR * 2 + k * 8 + pulse * 6);
-    }
-    rotate(frameCount * 0.05);
-    stroke(255, 230, 80);
-    strokeWeight(2);
-    for (let a = 0; a < TWO_PI; a += HALF_PI) {
-      arc(0, 0, portalR * 1.2, portalR * 1.2, a, a + 1);
-    }
-    pop();
-  }
+function enforceEdgeFraming() {
+  let ci = floor(cols / 2);
+  let cj = floor(rows / 2);
+  if (localVariance(ci, cj, 3) >= PARAMS.edge.minVariance) return;
 
-  function checkPortal() {
-    if (dist(ballX, ballY, portalX, portalY) < PARAMS.portal.portalR) {
-      state = "entrando";
-      diveT = 0;
-      dive = {
-        fromX: viewX,
-        fromY: viewY,
-        toX: viewX + (portalX - width / 2) * viewScale,
-        toY: viewY + (portalY - height / 2) * viewScale,
-        fromScale: viewScale,
-        fromIter: maxIterations,
-        toIter: iterCapForLevel(level + 1),
-        ballX0: ballX,
-        ballY0: ballY,
-      };
-    }
-  }
+  let found = findEdgeBlock(ci, cj, PARAMS.edge.searchRadius);
+  if (!found) return;
 
-  function updateDive() {
-    diveT++;
-    let diveFrames = PARAMS.zoom.diveFrames;
-    let t = diveT / diveFrames;
-    let e = t * t * (3 - 2 * t); // suavizado
+  let paso = PARAMS.fractal.paso;
+  let dx = (found.i - ci) * paso * viewScale;
+  let dy = (found.j - cj) * paso * viewScale;
 
-    viewX = lerp(dive.fromX, dive.toX, e);
-    viewY = lerp(dive.fromY, dive.toY, e);
-    viewScale = dive.fromScale * pow(1 / PARAMS.zoom.zoomPerLevel, e);
-    maxIterations = round(lerp(dive.fromIter, dive.toIter, e));
+  viewX += dx * PARAMS.edge.driftStrength;
+  viewY += dy * PARAMS.edge.driftStrength;
+}
 
-    ballX = lerp(dive.ballX0, width / 2, e);
-    ballY = lerp(dive.ballY0, height / 2, e);
+// ================================
+// PORTAL Y VERIFICACIÓN DE ALCANCE (REACHABILITY)
+// ================================
 
-    computeFractal();
-    enforceEdgeFraming();
+// Calcula mediante BFS qué celdas de aire libre están conectadas por un camino
+// transitable por la pelota desde (startX, startY)
+function computeReachableMask(startX, startY) {
+  let paso = PARAMS.fractal.paso;
+  let mask = new Uint8Array(cols * rows);
+  let queue = [];
 
-    if (diveT >= diveFrames) {
-      level++;
-      if (level > PARAMS.game.finalLevel) {
-        state = "ganaste";
-        return;
+  let startI = constrain(floor(startX / paso), 0, cols - 1);
+  let startJ = constrain(floor(startY / paso), 0, rows - 1);
+  let startIdx = startI + startJ * cols;
+
+  mask[startIdx] = 1;
+  queue.push(startIdx);
+
+  let navR = max(4, PARAMS.ball.ballR * 0.6);
+  let head = 0;
+
+  while (head < queue.length) {
+    let curr = queue[head++];
+    let ci = curr % cols;
+    let cj = floor(curr / cols);
+
+    let neighbors = [
+      ci > 0 ? curr - 1 : -1,
+      ci < cols - 1 ? curr + 1 : -1,
+      cj > 0 ? curr - cols : -1,
+      cj < rows - 1 ? curr + cols : -1,
+    ];
+
+    for (let k = 0; k < 4; k++) {
+      let nIdx = neighbors[k];
+      if (nIdx !== -1 && mask[nIdx] === 0) {
+        let ni = nIdx % cols;
+        let nj = floor(nIdx / cols);
+        let npx = ni * paso + paso / 2;
+        let npy = nj * paso + paso / 2;
+
+        if (!isFractalSolid(npx, npy) && isCircleClear(npx, npy, navR)) {
+          mask[nIdx] = 1;
+          queue.push(nIdx);
+        }
       }
-      maxIterations = iterCapForLevel(level);
-      settleView();
-      pickPortal();
-      resetBall();
-      state = "jugando";
     }
   }
 
-  // ---------- PELOTA Y RAQUETA ----------
+  return mask;
+}
 
-  function updateBall() {
-    let ballR = PARAMS.ball.ballR;
-    ballVy += PARAMS.ball.gravity;
-    ballVx *= PARAMS.ball.friction;
-    ballVy *= PARAMS.ball.friction;
-    ballX += ballVx;
-    ballY += ballVy;
+// Selecciona la posición del portal garantizando que pertenezca al espacio
+// aéreo transitable por la pelota (nunca en cuevas o lagos cerrados)
+function pickPortal() {
+  let paso = PARAMS.fractal.paso;
+  let portalR = PARAMS.portal.portalR;
 
-    if (ballX < ballR || ballX > width - ballR) {
-      ballVx *= -1;
-      ballX = constrain(ballX, ballR, width - ballR);
+  // Calcular la máscara de alcance desde la posición actual de la pelota
+  let reachableMask = computeReachableMask(ballX, ballY);
+
+  let candidates = [];
+  let minN = maxIterations * 0.35;
+  let maxN = maxIterations * (PARAMS.fractal.solidThreshold || 0.8) * 0.92;
+
+  let minJ = floor(90 / paso);
+  let maxJ = floor((height - 130) / paso);
+  let minI = floor(100 / paso);
+  let maxI = floor((width - 100) / paso);
+
+  // Distancia mínima respecto al spawn para evitar que se meta al nacer
+  let minBallDist = max(140, min(width, height) * 0.28);
+
+  for (let j = minJ; j < maxJ; j += 2) {
+    let rowIdx = j * cols;
+    for (let i = minI; i < maxI; i += 2) {
+      let idx = i + rowIdx;
+      // DEBE ser alcanzable por la pelota mediante aire continuo
+      if (reachableMask[idx] === 1) {
+        let px = i * paso + paso / 2;
+        let py = j * paso + paso / 2;
+        let d = dist(px, py, ballX, ballY);
+
+        if (d >= minBallDist) {
+          if (isCircleClear(px, py, portalR + 10)) {
+            let n = iters[idx];
+            // Bonificación estética si está cerca de la costa fractal
+            let score = (n >= minN && n <= maxN) ? 2 : 1;
+            candidates.push({ x: px, y: py, dist: d, score: score });
+          }
+        }
+      }
+    }
+  }
+
+  if (candidates.length > 0) {
+    candidates.sort((a, b) => b.score - a.score || b.dist - a.dist);
+    let topCount = min(candidates.length, 8);
+    let c = candidates[floor(random(topCount))];
+    portalX = c.x;
+    portalY = c.y;
+    return;
+  }
+
+  // Respaldo en cualquier punto alcanzable con distancia segura
+  let fallback = [];
+  for (let idx = 0; idx < reachableMask.length; idx++) {
+    if (reachableMask[idx] === 1) {
+      let i = idx % cols;
+      let j = floor(idx / cols);
+      if (i >= minI && i <= maxI && j >= minJ && j <= maxJ) {
+        let px = i * paso + paso / 2;
+        let py = j * paso + paso / 2;
+        if (dist(px, py, ballX, ballY) > 100 && isCircleClear(px, py, portalR + 6)) {
+          fallback.push({ x: px, y: py });
+        }
+      }
+    }
+  }
+
+  if (fallback.length > 0) {
+    let f = random(fallback);
+    portalX = f.x;
+    portalY = f.y;
+    return;
+  }
+
+  let free = findNearestFreePoint(width / 2, height / 2, portalR + 12);
+  portalX = free.x;
+  portalY = free.y;
+}
+
+function drawPortal() {
+  let portalR = PARAMS.portal.portalR;
+  let pulse = sin(frameCount * 0.12);
+  let pal = PALETTES[PARAMS.fractal.palette] || PALETTES.cyberpunk;
+
+  push();
+  translate(portalX, portalY);
+  noFill();
+
+  for (let k = 3; k > 0; k--) {
+    stroke(pal.edgeCol[0], pal.edgeCol[1], pal.edgeCol[2], 50 + 55 * k);
+    strokeWeight(k * 1.6);
+    circle(0, 0, portalR * 2 + k * 8 + pulse * 6);
+  }
+
+  rotate(frameCount * 0.05);
+  stroke(pal.edgeGlow[0], pal.edgeGlow[1], pal.edgeGlow[2]);
+  strokeWeight(2.5);
+  for (let a = 0; a < TWO_PI; a += HALF_PI) {
+    arc(0, 0, portalR * 1.3, portalR * 1.3, a, a + 1);
+  }
+  pop();
+}
+
+function checkPortal() {
+  let triggerDist = PARAMS.portal.portalR + PARAMS.ball.ballR * 0.6;
+  if (dist(ballX, ballY, portalX, portalY) < triggerDist) {
+    state = "entrando";
+    diveT = 0;
+    dive = {
+      fromX: viewX,
+      fromY: viewY,
+      toX: viewX + (portalX - width / 2) * viewScale,
+      toY: viewY + (portalY - height / 2) * viewScale,
+      fromScale: viewScale,
+      fromIter: maxIterations,
+      toIter: iterCapForLevel(level + 1),
+      ballX0: ballX,
+      ballY0: ballY,
+    };
+  }
+}
+
+function updateDive() {
+  diveT++;
+  let diveFrames = PARAMS.zoom.diveFrames;
+  let t = diveT / diveFrames;
+  let e = t * t * (3 - 2 * t);
+
+  viewX = lerp(dive.fromX, dive.toX, e);
+  viewY = lerp(dive.fromY, dive.toY, e);
+  viewScale = dive.fromScale * pow(1 / PARAMS.zoom.zoomPerLevel, e);
+  maxIterations = round(lerp(dive.fromIter, dive.toIter, e));
+
+  ballX = lerp(dive.ballX0, width / 2, e);
+  ballY = lerp(dive.ballY0, height / 2, e);
+
+  computeFractal();
+  enforceEdgeFraming();
+
+  if (diveT >= diveFrames) {
+    level++;
+    if (level > PARAMS.game.finalLevel) {
+      state = "ganaste";
+      return;
+    }
+    maxIterations = iterCapForLevel(level);
+    settleView();
+    resetBall();
+    pickPortal();
+    state = "jugando";
+  }
+}
+
+// ================================
+// FÍSICA Y REBOTE DE LA PELOTA
+// ================================
+function updateBall() {
+  let ballR = PARAMS.ball.ballR;
+  let subSteps = 2;
+  let dtGravity = PARAMS.ball.gravity / subSteps;
+  let dtFriction = pow(PARAMS.ball.friction, 1 / subSteps);
+
+  for (let step = 0; step < subSteps; step++) {
+    ballVy += dtGravity;
+    ballVx *= dtFriction;
+    ballVy *= dtFriction;
+    ballX += ballVx / subSteps;
+    ballY += ballVy / subSteps;
+
+    // Paredes y techo
+    if (ballX < ballR) {
+      ballVx = abs(ballVx);
+      ballX = ballR;
+    } else if (ballX > width - ballR) {
+      ballVx = -abs(ballVx);
+      ballX = width - ballR;
     }
     if (ballY < ballR) {
-      ballVy *= -1;
+      ballVy = abs(ballVy);
       ballY = ballR;
     }
 
-    if (ballY > height - ballR) {
-      lives--;
-      flash = 150;
-      if (lives <= 0) {
-        state = "perdiste";
-        ballY = height - ballR;
-      } else {
-        resetBall();
-      }
+    // Colisión física contra bordes del fractal
+    checkFractalCollision();
+  }
+
+  // Suelo (pérdida de vida)
+  if (ballY > height - ballR) {
+    lives--;
+    flash = 150;
+    if (lives <= 0) {
+      state = "perdiste";
+      ballY = height - ballR;
+    } else {
+      resetBall();
+    }
+  }
+}
+
+function checkFractalCollision() {
+  let ballR = PARAMS.ball.ballR;
+  let bounciness = PARAMS.ball.bounciness || 0.8;
+
+  // RECUPERACIÓN / EXPULSIÓN DE EMERGENCIA:
+  // Si la pelota llega a quedar dentro del conjunto fractal, se expulsa de inmediato al espacio abierto
+  if (isFractalSolid(ballX, ballY)) {
+    let free = findNearestFreePoint(ballX, ballY, ballR + 6);
+    let dirX = free.x - ballX;
+    let dirY = free.y - ballY;
+    let d = sqrt(dirX * dirX + dirY * dirY);
+    if (d > 0) {
+      dirX /= d;
+      dirY /= d;
+    } else {
+      dirX = 0;
+      dirY = -1;
+    }
+    ballX = free.x;
+    ballY = free.y;
+    ballVx = dirX * max(abs(ballVx), 4.5);
+    ballVy = dirY * max(abs(ballVy), 4.5);
+    spawnFractalBounceEffect(ballX, ballY, dirX, dirY);
+    playBounceSound(7);
+    return;
+  }
+
+  let samples = 12;
+  let hits = 0;
+  let normX = 0;
+  let normY = 0;
+
+  for (let k = 0; k < samples; k++) {
+    let ang = (k * TWO_PI) / samples;
+    let sx = ballX + cos(ang) * ballR;
+    let sy = ballY + sin(ang) * ballR;
+    if (isFractalSolid(sx, sy)) {
+      hits++;
+      normX -= cos(ang);
+      normY -= sin(ang);
     }
   }
 
-  function hitBall() {
-    let ballR = PARAMS.ball.ballR;
-    let batR = PARAMS.racket.batR;
-    let dx = ballX - mouseX;
-    let dy = ballY - mouseY;
-    let d = sqrt(dx * dx + dy * dy);
-    let minDist = ballR + batR;
+  if (hits > 0) {
+    let d = sqrt(normX * normX + normY * normY);
+    if (d < 0.0001) {
+      normX = 0;
+      normY = -1;
+    } else {
+      normX /= d;
+      normY /= d;
+    }
 
-    if (d < minDist && d > 0) {
-      let nx = dx / d;
-      let ny = dy / d;
+    // Separación para no incrustarse en la roca fractal
+    let pushDist = map(min(hits, samples), 1, samples, 1.2, ballR * 0.45);
+    ballX += normX * pushDist;
+    ballY += normY * pushDist;
 
-      ballX = mouseX + nx * minDist;
-      ballY = mouseY + ny * minDist;
+    // Vector de velocidad relativa contra la normal
+    let vn = ballVx * normX + ballVy * normY;
+    if (vn < 0) {
+      ballVx -= (1 + bounciness) * vn * normX;
+      ballVy -= (1 + bounciness) * vn * normY;
 
-      let batVx = mouseX - pmouseX;
-      let batVy = mouseY - pmouseY;
+      // Fricción tangencial
+      ballVx *= 0.98;
+      ballVy *= 0.98;
 
-      let relV = (ballVx - batVx) * nx + (ballVy - batVy) * ny;
-      if (relV < 0) {
-        ballVx -= 2 * relV * nx;
-        ballVy -= 2 * relV * ny;
-      }
-
-      let speed = sqrt(ballVx * ballVx + ballVy * ballVy);
-      if (speed < 3) {
-        ballVx = nx * 3;
-        ballVy = ny * 3;
-      }
-      speed = sqrt(ballVx * ballVx + ballVy * ballVy);
+      let spd = sqrt(ballVx * ballVx + ballVy * ballVy);
       let maxSpeed = PARAMS.ball.maxSpeed;
-      if (speed > maxSpeed) {
-        ballVx = (ballVx / speed) * maxSpeed;
-        ballVy = (ballVy / speed) * maxSpeed;
+      if (spd > maxSpeed) {
+        ballVx = (ballVx / spd) * maxSpeed;
+        ballVy = (ballVy / spd) * maxSpeed;
       }
+
+      let impactX = ballX - normX * ballR;
+      let impactY = ballY - normY * ballR;
+      spawnFractalBounceEffect(impactX, impactY, normX, normY);
+      playBounceSound(spd);
     }
   }
+}
 
-  function drawBall(s) {
-    let ballR = PARAMS.ball.ballR;
-    let r = ballR * s;
-    if (r <= 0.5) return;
+function hitBall() {
+  getAudioContextSafe();
+  let ballR = PARAMS.ball.ballR;
+  let batR = PARAMS.racket.batR;
+  let dx = ballX - mouseX;
+  let dy = ballY - mouseY;
+  let d = sqrt(dx * dx + dy * dy);
+  let minDist = ballR + batR;
+
+  if (d < minDist && d > 0) {
+    let nx = dx / d;
+    let ny = dy / d;
+
+    ballX = mouseX + nx * minDist;
+    ballY = mouseY + ny * minDist;
+
+    let batVx = mouseX - pmouseX;
+    let batVy = mouseY - pmouseY;
+
+    let relV = (ballVx - batVx) * nx + (ballVy - batVy) * ny;
+    if (relV < 0) {
+      ballVx -= 2 * relV * nx;
+      ballVy -= 2 * relV * ny;
+    }
 
     let speed = sqrt(ballVx * ballVx + ballVy * ballVy);
-    let heat = constrain(speed / PARAMS.ball.maxSpeed, 0, 1);
-
-    push();
-    translate(ballX, ballY);
-    noStroke();
-
-    for (let k = 4; k > 0; k--) {
-      let a = map(k, 4, 1, 10, 45);
-      let glowCol = lerpColor(color(80, 220, 255), color(255, 60, 220), heat);
-      fill(red(glowCol), green(glowCol), blue(glowCol), a);
-      circle(0, 0, r * 2 + k * (8 + heat * 6));
+    if (speed < 3.5) {
+      ballVx = nx * 3.5;
+      ballVy = ny * 3.5;
     }
-
-    let ctx = drawingContext;
-    let grad = ctx.createRadialGradient(-r * 0.3, -r * 0.3, r * 0.1, 0, 0, r);
-    let c1 = lerpColor(color(255, 255, 255), color(200, 255, 255), heat);
-    let c2 = lerpColor(color(70, 150, 255), color(255, 30, 190), heat);
-    grad.addColorStop(0, "rgba(" + red(c1) + ", " + green(c1) + ", " + blue(c1) + ", 1)");
-    grad.addColorStop(1, "rgba(" + red(c2) + ", " + green(c2) + ", " + blue(c2) + ", 0.95)");
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.arc(0, 0, r, 0, TWO_PI);
-    ctx.fill();
-
-    noFill();
-    stroke(255, 255, 255, 210);
-    strokeWeight(1.2 * s);
-    circle(0, 0, r * 2);
-    pop();
-  }
-
-  function drawRacket(x, y) {
-    let batR = PARAMS.racket.batR;
-    let target = constrain((mouseX - pmouseX) * 0.04, -0.8, 0.8);
-    swing = lerp(swing, target, 0.2);
-
-    push();
-    translate(x, y);
-    rotate(swing);
-    noFill();
-
-    for (let k = 3; k > 0; k--) {
-      stroke(80, 220, 255, 45 + 20 * k);
-      strokeWeight(k * 2);
-      circle(0, 0, batR * 2 + k * 6);
+    speed = sqrt(ballVx * ballVx + ballVy * ballVy);
+    let maxSpeed = PARAMS.ball.maxSpeed;
+    if (speed > maxSpeed) {
+      ballVx = (ballVx / speed) * maxSpeed;
+      ballVy = (ballVy / speed) * maxSpeed;
     }
+  }
+}
 
-    stroke(190, 240, 255);
-    strokeWeight(3);
-    circle(0, 0, batR * 2);
+// ================================
+// EFECTOS VISUALES
+// ================================
+function spawnFractalBounceEffect(x, y, nx, ny) {
+  let pal = PALETTES[PARAMS.fractal.palette] || PALETTES.cyberpunk;
+  bounceEffects.push({
+    type: "ring",
+    x: x,
+    y: y,
+    r: 4,
+    alpha: 255,
+    col: color(pal.edgeCol[0], pal.edgeCol[1], pal.edgeCol[2]),
+  });
 
-    stroke(255, 230, 80, 210);
-    strokeWeight(2);
-    for (let a = 0; a < TWO_PI; a += PI / 3) {
-      let x1 = cos(a) * (batR - 6);
-      let y1 = sin(a) * (batR - 6);
-      let x2 = cos(a) * (batR + 4);
-      let y2 = sin(a) * (batR + 4);
-      line(x1, y1, x2, y2);
+  for (let i = 0; i < 6; i++) {
+    let spread = random(-0.6, 0.6);
+    let cosS = cos(spread);
+    let sinS = sin(spread);
+    let spdX = (nx * cosS - ny * sinS) * random(1.5, 4.5);
+    let spdY = (nx * sinS + ny * cosS) * random(1.5, 4.5);
+    bounceEffects.push({
+      type: "spark",
+      x: x,
+      y: y,
+      vx: spdX,
+      vy: spdY,
+      r: random(2, 3.5),
+      alpha: 255,
+      col: random() > 0.5
+        ? color(pal.edgeGlow[0], pal.edgeGlow[1], pal.edgeGlow[2])
+        : color(pal.edgeCol[0], pal.edgeCol[1], pal.edgeCol[2]),
+    });
+  }
+}
+
+function spawnDropIndicator(x, startY, targetY) {
+  bounceEffects.push({
+    type: "dropLine",
+    x: x,
+    startY: startY,
+    targetY: targetY,
+    alpha: 220,
+  });
+}
+
+function updateAndDrawBounceEffects() {
+  let pal = PALETTES[PARAMS.fractal.palette] || PALETTES.cyberpunk;
+  for (let i = bounceEffects.length - 1; i >= 0; i--) {
+    let ef = bounceEffects[i];
+    if (ef.type === "ring") {
+      ef.r += 1.8;
+      ef.alpha -= 15;
+      if (ef.alpha <= 0) {
+        bounceEffects.splice(i, 1);
+        continue;
+      }
+      noFill();
+      stroke(red(ef.col), green(ef.col), blue(ef.col), ef.alpha);
+      strokeWeight(2);
+      circle(ef.x, ef.y, ef.r * 2);
+    } else if (ef.type === "spark") {
+      ef.x += ef.vx;
+      ef.y += ef.vy;
+      ef.alpha -= 14;
+      ef.r *= 0.94;
+      if (ef.alpha <= 0) {
+        bounceEffects.splice(i, 1);
+        continue;
+      }
+      noStroke();
+      fill(red(ef.col), green(ef.col), blue(ef.col), ef.alpha);
+      circle(ef.x, ef.y, ef.r * 2);
+    } else if (ef.type === "dropLine") {
+      ef.alpha -= 6;
+      if (ef.alpha <= 0) {
+        bounceEffects.splice(i, 1);
+        continue;
+      }
+      stroke(pal.edgeCol[0], pal.edgeCol[1], pal.edgeCol[2], ef.alpha * 0.7);
+      strokeWeight(1.5);
+      drawingContext.setLineDash([4, 4]);
+      line(ef.x, ef.startY, ef.x, ef.targetY);
+      drawingContext.setLineDash([]);
+
+      noFill();
+      stroke(pal.edgeGlow[0], pal.edgeGlow[1], pal.edgeGlow[2], ef.alpha);
+      strokeWeight(2);
+      circle(ef.x, ef.targetY, 14);
     }
-
-    noStroke();
-    fill(80, 220, 255, 25);
-    circle(0, 0, batR * 1.4);
-    pop();
   }
+}
 
-  // ---------- INTERFAZ ----------
+function drawBall(s) {
+  let ballR = PARAMS.ball.ballR;
+  let r = ballR * s;
+  if (r <= 0.5) return;
 
-  function drawHUD() {
-    let depth = round(3.5 / width / viewScale);
-    noStroke();
-    fill(0, 150);
-    rect(10, 10, 190, 70, 8);
-    fill(255);
-    textAlign(LEFT, TOP);
-    textSize(16);
-    text("Nivel: " + min(level, PARAMS.game.finalLevel) + " / " + PARAMS.game.finalLevel, 20, 16);
-    text("Vidas: " + "♥".repeat(max(lives, 0)), 20, 36);
-    text("Profundidad: x" + depth, 20, 56);
-  }
+  let speed = sqrt(ballVx * ballVx + ballVy * ballVy);
+  let heat = constrain(speed / PARAMS.ball.maxSpeed, 0, 1);
+  let pal = PALETTES[PARAMS.fractal.palette] || PALETTES.cyberpunk;
 
-  function drawEndScreen() {
-    noStroke();
-    fill(0, 170);
-    rect(0, 0, width, height);
-    textAlign(CENTER, CENTER);
+  push();
+  translate(ballX, ballY);
+  noStroke();
 
-    if (state === "ganaste") {
-      fill(220, 255, 60);
-      textSize(40);
-      text("¡ENTRASTE AL FRACTAL!", width / 2, height / 2 - 40);
-      fill(255);
-      textSize(18);
-      text("Zoom final: x" + round(3.5 / width / viewScale), width / 2, height / 2 + 10);
-    } else {
-      fill(255, 60, 80);
-      textSize(52);
-      text("GAME OVER", width / 2, height / 2 - 40);
-      fill(255);
-      textSize(18);
-      text("Llegaste al nivel " + level, width / 2, height / 2 + 10);
-    }
-    textSize(16);
-    text("Hacé click para jugar de nuevo", width / 2, height / 2 + 50);
-  }
-
-  function mousePressed() {
-    let dentroDelCanvas = mouseX >= 0 && mouseX <= width && mouseY >= 0 && mouseY <= height;
-    if ((state === "ganaste" || state === "perdiste") && dentroDelCanvas) resetGame();
-  }
-
-  // ================================
-  // PANEL DE SLIDERS (uno por parámetro, agrupados por categoría)
-  // ================================
-  const GROUP_LABELS = {
-    fractal: "Fractal",
-    zoom: "Zoom / Portal",
-    edge: "Camara en el borde",
-    ball: "Pelota",
-    racket: "Raqueta",
-    portal: "Portal",
-    game: "Juego",
-  };
-
-  const PARAM_DEFS = [
-    { group: "fractal", key: "paso", label: "Resolucion (paso)", min: 1, max: 10, step: 1,
-      onChange: function () { resizeFractalBuffers(); computeFractal(); } },
-    { group: "fractal", key: "maxIterBase", label: "Iteraciones base", min: 10, max: 100, step: 5,
-      onChange: function () { maxIterations = iterCapForLevel(level); computeFractal(); } },
-    { group: "fractal", key: "maxIterPerLevel", label: "Iteraciones x nivel", min: 0, max: 60, step: 5 },
-    { group: "fractal", key: "maxIterCap", label: "Tope de iteraciones", min: 60, max: 400, step: 10 },
-
-    { group: "zoom", key: "zoomPerLevel", label: "Zoom por portal", min: 5, max: 200, step: 5 },
-    { group: "zoom", key: "diveFrames", label: "Duracion zambullida", min: 40, max: 400, step: 10 },
-
-    { group: "edge", key: "minVariance", label: "Detalle minimo exigido", min: 0, max: 400, step: 5 },
-    { group: "edge", key: "driftStrength", label: "Fuerza de correccion", min: 0, max: 1, step: 0.01 },
-    { group: "edge", key: "searchRadius", label: "Radio de busqueda (bloques)", min: 2, max: 40, step: 1 },
-    { group: "ball", key: "ballR", label: "Radio pelota", min: 4, max: 30, step: 1 },
-    { group: "ball", key: "gravity", label: "Gravedad", min: 0, max: 0.5, step: 0.01 },
-    { group: "ball", key: "friction", label: "Friccion", min: 0.9, max: 1, step: 0.001 },
-    { group: "ball", key: "maxSpeed", label: "Velocidad max.", min: 4, max: 30, step: 1 },
-
-    { group: "racket", key: "batR", label: "Radio raqueta", min: 10, max: 50, step: 1 },
-
-    { group: "portal", key: "portalR", label: "Radio del portal", min: 10, max: 50, step: 1 },
-    { group: "portal", key: "portalR", label: "Radio del portal", min: 10, max: 50, step: 1 },
-
-    { group: "game", key: "finalLevel", label: "Nivel final", min: 1, max: 12, step: 1 },
-    { group: "game", key: "startLives", label: "Vidas iniciales", min: 1, max: 9, step: 1 },
-  ];
-
-  function buildSliderPanel() {
-    createElement("style",
-      "#paramPanel { width: " + width + "px; font-family: sans-serif; font-size: 12px; " +
-      "background: #0a0a0f; color: #cfe; padding: 10px; box-sizing: border-box; }" +
-      ".paramGroup { display: inline-block; vertical-align: top; width: 48%; margin-bottom: 10px; }" +
-      ".paramGroup h4 { margin: 4px 0; color: #50dcff; font-size: 13px; }" +
-      ".paramRow { display: flex; align-items: center; justify-content: space-between; margin: 2px 0; gap: 6px; }" +
-      ".paramRow span:first-child { flex: 1; }" +
-      ".paramRow span.val { width: 42px; text-align: right; color: #ffe650; }"
+  for (let k = 4; k > 0; k--) {
+    let a = map(k, 4, 1, 10, 45);
+    let glowCol = lerpColor(
+      color(pal.edgeCol[0], pal.edgeCol[1], pal.edgeCol[2]),
+      color(pal.edgeGlow[0], pal.edgeGlow[1], pal.edgeGlow[2]),
+      heat
     );
-  
-    let panel = createDiv("").id("paramPanel");
-
-    let groupDivs = {};
-    for (let g in GROUP_LABELS) {
-      let gd = createDiv("").class("paramGroup").parent(panel);
-      createElement("h4", GROUP_LABELS[g]).parent(gd);
-      groupDivs[g] = gd;
-    }
-    
-    for (let def of PARAM_DEFS) {
-      let row = createDiv("").class("paramRow").parent(groupDivs[def.group]);
-      createSpan(def.label).parent(row);
-      let val = PARAMS[def.group][def.key];
-      let slider = createSlider(def.min, def.max, val, def.step).parent(row);
-      let valSpan = createSpan(String(val)).class("val").parent(row);
-
-      slider.input(function () {
-        let v = slider.value();
-        PARAMS[def.group][def.key] = v;
-        valSpan.html(String(v));
-        if (def.onChange) def.onChange();
-      });
-    }
+    fill(red(glowCol), green(glowCol), blue(glowCol), a);
+    circle(0, 0, r * 2 + k * (8 + heat * 6));
   }
+
+  let ctx = drawingContext;
+  let grad = ctx.createRadialGradient(-r * 0.3, -r * 0.3, r * 0.1, 0, 0, r);
+  let c1 = color(255, 255, 255);
+  let c2 = lerpColor(
+    color(pal.edgeCol[0], pal.edgeCol[1], pal.edgeCol[2]),
+    color(pal.edgeGlow[0], pal.edgeGlow[1], pal.edgeGlow[2]),
+    heat
+  );
+  grad.addColorStop(0, "rgba(" + red(c1) + ", " + green(c1) + ", " + blue(c1) + ", 1)");
+  grad.addColorStop(1, "rgba(" + red(c2) + ", " + green(c2) + ", " + blue(c2) + ", 0.95)");
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(0, 0, r, 0, TWO_PI);
+  ctx.fill();
+
+  noFill();
+  stroke(255, 255, 255, 220);
+  strokeWeight(1.2 * s);
+  circle(0, 0, r * 2);
+  pop();
+}
+
+function drawRacket(x, y) {
+  let batR = PARAMS.racket.batR;
+  let target = constrain((mouseX - pmouseX) * 0.04, -0.8, 0.8);
+  swing = lerp(swing, target, 0.2);
+  let pal = PALETTES[PARAMS.fractal.palette] || PALETTES.cyberpunk;
+
+  push();
+  translate(x, y);
+  rotate(swing);
+  noFill();
+
+  for (let k = 3; k > 0; k--) {
+    stroke(pal.edgeCol[0], pal.edgeCol[1], pal.edgeCol[2], 40 + 20 * k);
+    strokeWeight(k * 2);
+    circle(0, 0, batR * 2 + k * 6);
+  }
+
+  stroke(220, 245, 255);
+  strokeWeight(2.8);
+  circle(0, 0, batR * 2);
+
+  stroke(pal.edgeGlow[0], pal.edgeGlow[1], pal.edgeGlow[2], 220);
+  strokeWeight(2);
+  for (let a = 0; a < TWO_PI; a += PI / 3) {
+    let x1 = cos(a) * (batR - 6);
+    let y1 = sin(a) * (batR - 6);
+    let x2 = cos(a) * (batR + 4);
+    let y2 = sin(a) * (batR + 4);
+    line(x1, y1, x2, y2);
+  }
+
+  noStroke();
+  fill(pal.edgeCol[0], pal.edgeCol[1], pal.edgeCol[2], 30);
+  circle(0, 0, batR * 1.4);
+  pop();
+}
+
+// ================================
+// HUD Y PANTALLAS DE JUEGO
+// ================================
+function drawHUD() {
+  let baseScale = 0.55 / min(width, height);
+  let depth = max(1, round(baseScale / viewScale));
+
+  push();
+  noStroke();
+  fill(10, 14, 27, 200);
+  rect(18, 18, 230, 80, 14);
+
+  stroke(80, 220, 255, 45);
+  strokeWeight(1);
+  noFill();
+  rect(18, 18, 230, 80, 14);
+
+  noStroke();
+  textAlign(LEFT, TOP);
+
+  fill(240, 249, 255);
+  textSize(14);
+  textStyle(BOLD);
+  text("NIVEL " + min(level, PARAMS.game.finalLevel) + " / " + PARAMS.game.finalLevel, 32, 27);
+
+  textStyle(NORMAL);
+  fill(255, 75, 110);
+  textSize(16);
+  let hearts = "♥ ".repeat(max(lives, 0));
+  text(hearts, 32, 46);
+
+  fill(125, 211, 252);
+  textSize(11);
+  text("ZOOM x" + depth, 32, 70);
+
+  fill(148, 163, 184);
+  textSize(10);
+  text("• [H] Ajustes • [F] Pantalla", 100, 70);
+  pop();
+}
+
+function drawEndScreen() {
+  noStroke();
+  fill(5, 7, 15, 210);
+  rect(0, 0, width, height);
+  textAlign(CENTER, CENTER);
+
+  if (state === "ganaste") {
+    fill(220, 255, 60);
+    textSize(min(width * 0.06, 44));
+    textStyle(BOLD);
+    text("¡CONQUISTASTE EL MANDELBROT!", width / 2, height / 2 - 40);
+    fill(240, 249, 255);
+    textSize(18);
+    textStyle(NORMAL);
+    let baseScale = 0.55 / min(width, height);
+    text("Profundidad final: x" + round(baseScale / viewScale), width / 2, height / 2 + 10);
+  } else {
+    fill(255, 60, 80);
+    textSize(min(width * 0.08, 54));
+    textStyle(BOLD);
+    text("GAME OVER", width / 2, height / 2 - 40);
+    fill(240, 249, 255);
+    textSize(18);
+    textStyle(NORMAL);
+    text("Alcanzaste el Nivel " + level, width / 2, height / 2 + 10);
+  }
+
+  fill(125, 211, 252);
+  textSize(15);
+  text("Hacé click en la pantalla para jugar de nuevo", width / 2, height / 2 + 50);
+}
+
+function mousePressed() {
+  getAudioContextSafe();
+  let panel = document.getElementById("paramPanel");
+  let btn = document.getElementById("togglePanelBtn");
+
+  // Si se hizo click fuera del panel y estaba abierto, o para reiniciar juego
+  if (state === "ganaste" || state === "perdiste") {
+    resetGame();
+  }
+}
+
+function keyPressed() {
+  if (key === "h" || key === "H" || keyCode === ESCAPE) {
+    togglePanel();
+  } else if (key === "f" || key === "F") {
+    let fs = fullscreen();
+    fullscreen(!fs);
+  } else if (key === "c" || key === "C") {
+    cyclePalette();
+  }
+}
+
+// ================================
+// PANEL DE AJUSTES FLOTANTE
+// ================================
+const GROUP_LABELS = {
+  fractal: "💠 Fractal",
+  zoom: "🚀 Zoom / Portal",
+  edge: "🎯 Cámara en el Borde",
+  ball: "🎾 Pelota & Físicas",
+  racket: "🏓 Raqueta",
+  portal: "🌀 Portal",
+  game: "🏆 Modo de Juego",
+};
+
+const PARAM_DEFS = [
+  { group: "fractal", key: "paso", label: "Resolución (paso)", min: 1, max: 8, step: 1,
+    onChange: function () { resizeFractalBuffers(); computeFractal(); } },
+  { group: "fractal", key: "maxIterBase", label: "Iteraciones base", min: 15, max: 120, step: 5,
+    onChange: function () { maxIterations = iterCapForLevel(level); computeFractal(); } },
+  { group: "fractal", key: "maxIterPerLevel", label: "Iteraciones x nivel", min: 0, max: 60, step: 5 },
+  { group: "fractal", key: "maxIterCap", label: "Tope de iteraciones", min: 60, max: 400, step: 10 },
+  { group: "fractal", key: "solidThreshold", label: "Umbral sólido borde", min: 0.5, max: 0.95, step: 0.05,
+    onChange: function () { computeFractal(); } },
+
+  { group: "zoom", key: "zoomPerLevel", label: "Zoom por portal", min: 5, max: 200, step: 5 },
+  { group: "zoom", key: "diveFrames", label: "Duración zambullida", min: 40, max: 400, step: 10 },
+
+  { group: "edge", key: "minVariance", label: "Detalle mínimo exigido", min: 0, max: 400, step: 5 },
+  { group: "edge", key: "driftStrength", label: "Fuerza corrección borde", min: 0, max: 1, step: 0.01 },
+  { group: "edge", key: "searchRadius", label: "Radio de búsqueda", min: 2, max: 40, step: 1 },
+
+  { group: "ball", key: "ballR", label: "Radio pelota", min: 6, max: 28, step: 1 },
+  { group: "ball", key: "gravity", label: "Gravedad", min: 0, max: 0.5, step: 0.01 },
+  { group: "ball", key: "friction", label: "Fricción", min: 0.95, max: 1, step: 0.001 },
+  { group: "ball", key: "maxSpeed", label: "Velocidad max.", min: 6, max: 30, step: 1 },
+  { group: "ball", key: "bounciness", label: "Rebote en fractal", min: 0.2, max: 1.0, step: 0.05 },
+
+  { group: "racket", key: "batR", label: "Radio raqueta", min: 14, max: 50, step: 1 },
+
+  { group: "portal", key: "portalR", label: "Radio portal", min: 12, max: 50, step: 1 },
+
+  { group: "game", key: "finalLevel", label: "Nivel final", min: 1, max: 12, step: 1 },
+  { group: "game", key: "startLives", label: "Vidas iniciales", min: 1, max: 9, step: 1 },
+];
+
+function togglePanel(force) {
+  let panel = select("#paramPanel");
+  let btn = select("#togglePanelBtn");
+  if (!panel || !btn) return;
+
+  if (force !== undefined) isPanelVisible = force;
+  else isPanelVisible = !isPanelVisible;
+
+  if (isPanelVisible) {
+    panel.removeClass("panel-hidden");
+    btn.html("✕ Ocultar (H)");
+  } else {
+    panel.addClass("panel-hidden");
+    btn.html("⚙️ Ajustes (H)");
+  }
+}
+
+function setPalette(key) {
+  if (PALETTES[key]) {
+    PARAMS.fractal.palette = key;
+    let btns = selectAll(".paletteBtn");
+    btns.forEach(b => {
+      if (b.attribute("data-key") === key) b.addClass("active");
+      else b.removeClass("active");
+    });
+    paintFractal();
+  }
+}
+
+function cyclePalette() {
+  let currIdx = PALETTE_KEYS.indexOf(PARAMS.fractal.palette);
+  let nextIdx = (currIdx + 1) % PALETTE_KEYS.length;
+  setPalette(PALETTE_KEYS[nextIdx]);
+}
+
+function buildSliderPanel() {
+  // Botón flotante para abrir/ocultar el panel
+  let toggleBtn = createButton("⚙️ Ajustes (H)").id("togglePanelBtn");
+  toggleBtn.mousePressed(() => togglePanel());
+
+  // Panel contenedor lateral oculto por defecto
+  let panel = createDiv("").id("paramPanel").addClass("panel-hidden");
+
+  // Encabezado
+  let header = createDiv("").class("panelHeader").parent(panel);
+  let title = createDiv("<span>🎮 Centro de Control</span>").class("panelTitle").parent(header);
+  let closeBtn = createButton("✕").class("panelCloseBtn").parent(header);
+  closeBtn.mousePressed(() => togglePanel(false));
+
+  // Cuerpo scrollable
+  let body = createDiv("").class("panelBody").parent(panel);
+
+  // Selector de Paletas de Color
+  let palSection = createDiv("").class("paletteSection").parent(body);
+  createElement("div", "🎨 Paleta de Color").class("sectionHeader").parent(palSection);
+  let palGrid = createDiv("").class("paletteGrid").parent(palSection);
+
+  for (let key in PALETTES) {
+    let p = PALETTES[key];
+    let btn = createButton("").class("paletteBtn").parent(palGrid);
+    btn.attribute("data-key", key);
+    if (key === PARAMS.fractal.palette) btn.addClass("active");
+
+    let dot = createSpan("").class("paletteDot").parent(btn);
+    dot.style("background-color", p.color);
+    createSpan(p.name).parent(btn);
+
+    btn.mousePressed(() => setPalette(key));
+  }
+
+  // Grupos de sliders
+  let groupDivs = {};
+  for (let g in GROUP_LABELS) {
+    let gd = createDiv("").class("paramGroup").parent(body);
+    createElement("h4", GROUP_LABELS[g]).parent(gd);
+    groupDivs[g] = gd;
+  }
+
+  for (let def of PARAM_DEFS) {
+    let row = createDiv("").class("paramRow").parent(groupDivs[def.group]);
+    createSpan(def.label).parent(row);
+    let val = PARAMS[def.group][def.key];
+    let slider = createSlider(def.min, def.max, val, def.step).parent(row);
+    let valSpan = createSpan(String(val)).class("val").parent(row);
+
+    slider.input(function () {
+      let v = slider.value();
+      PARAMS[def.group][def.key] = v;
+      valSpan.html(String(v));
+      if (def.onChange) def.onChange();
+    });
+  }
+
+  // Pie con botones de acción rápida
+  let footer = createDiv("").class("panelFooter").parent(panel);
+  let fsBtn = createButton("⛶ Pantalla Completa").class("panelActionBtn").parent(footer);
+  fsBtn.mousePressed(() => {
+    let fs = fullscreen();
+    fullscreen(!fs);
+  });
+
+  let restartBtn = createButton("🔄 Reiniciar").class("panelActionBtn").parent(footer);
+  restartBtn.mousePressed(() => {
+    resetGame();
+    togglePanel(false);
+  });
+}
