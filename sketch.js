@@ -641,7 +641,7 @@ function enforceEdgeFraming() {
 // ================================
 
 // Calcula mediante BFS qué celdas del conjunto oscuro están conectadas
-// por un camino navegable desde (startX, startY)
+// por un camino navegable continuo desde la posición de la pelota
 function computeReachableMask(startX, startY) {
   let paso = PARAMS.fractal.paso;
   let mask = new Uint8Array(cols * rows);
@@ -654,7 +654,7 @@ function computeReachableMask(startX, startY) {
   mask[startIdx] = 1;
   queue.push(startIdx);
 
-  let navR = max(4, PARAMS.ball.ballR * 0.6);
+  let navR = max(3, PARAMS.ball.ballR * 0.5);
   let head = 0;
 
   while (head < queue.length) {
@@ -686,80 +686,96 @@ function computeReachableMask(startX, startY) {
     }
   }
 
-  return mask;
+  return { mask: mask, reachableIndices: queue };
 }
 
+// Selecciona la posición del portal garantizando al 100% que sea accesible por la pelota
 function pickPortal() {
   let paso = PARAMS.fractal.paso;
   let portalR = PARAMS.portal.portalR;
 
-  let reachableMask = computeReachableMask(ballX, ballY);
-
-  let candidates = [];
-  let minN = maxIterations * 0.35;
-  let maxN = maxIterations * (PARAMS.fractal.solidThreshold || 0.8) * 0.92;
+  // 1. Obtener todas las celdas conectadas y navegables desde la pelota
+  let reach = computeReachableMask(ballX, ballY);
+  let reachableIndices = reach.reachableIndices;
 
   let minJ = floor(90 / paso);
-  let maxJ = floor((height - 130) / paso);
-  let minI = floor(100 / paso);
-  let maxI = floor((width - 100) / paso);
+  let maxJ = floor((height - 120) / paso);
+  let minI = floor(90 / paso);
+  let maxI = floor((width - 90) / paso);
 
-  let minBallDist = max(140, min(width, height) * 0.28);
+  let minBallDist = max(130, min(width, height) * 0.25);
 
-  for (let j = minJ; j < maxJ; j += 2) {
-    let rowIdx = j * cols;
-    for (let i = minI; i < maxI; i += 2) {
-      let idx = i + rowIdx;
-      if (reachableMask[idx] === 1) {
+  // Niveles de holgura decreciente para garantizar SIEMPRE encontrar un punto alcanzable
+  let clearanceLevels = [portalR * 0.75, portalR * 0.5, PARAMS.ball.ballR * 0.75];
+
+  for (let cl = 0; cl < clearanceLevels.length; cl++) {
+    let reqClear = clearanceLevels[cl];
+    let candidates = [];
+
+    for (let idx of reachableIndices) {
+      let i = idx % cols;
+      let j = floor(idx / cols);
+
+      if (i >= minI && i <= maxI && j >= minJ && j <= maxJ) {
         let px = i * paso + paso / 2;
         let py = j * paso + paso / 2;
         let d = dist(px, py, ballX, ballY);
 
         if (d >= minBallDist) {
-          if (isCircleInsideSet(px, py, portalR + 10)) {
-            let n = iters[idx];
-            let score = (n >= minN && n <= maxN) ? 2 : 1;
-            candidates.push({ x: px, y: py, dist: d, score: score });
+          if (isCircleInsideSet(px, py, reqClear)) {
+            let isNearBorder = false;
+            let checkOffsets = [-2, -1, 1, 2];
+            for (let od of checkOffsets) {
+              if (!isInsideSet(px + od * paso, py) || !isInsideSet(px, py + od * paso)) {
+                isNearBorder = true;
+                break;
+              }
+            }
+            candidates.push({ x: px, y: py, dist: d, nearBorder: isNearBorder });
           }
         }
       }
     }
-  }
 
-  if (candidates.length > 0) {
-    candidates.sort((a, b) => b.score - a.score || b.dist - a.dist);
-    let topCount = min(candidates.length, 8);
-    let c = candidates[floor(random(topCount))];
-    portalX = c.x;
-    portalY = c.y;
-    return;
-  }
-
-  let fallback = [];
-  for (let idx = 0; idx < reachableMask.length; idx++) {
-    if (reachableMask[idx] === 1) {
-      let i = idx % cols;
-      let j = floor(idx / cols);
-      if (i >= minI && i <= maxI && j >= minJ && j <= maxJ) {
-        let px = i * paso + paso / 2;
-        let py = j * paso + paso / 2;
-        if (dist(px, py, ballX, ballY) > 100 && isCircleInsideSet(px, py, portalR + 6)) {
-          fallback.push({ x: px, y: py });
-        }
-      }
+    if (candidates.length > 0) {
+      candidates.sort((a, b) => (b.nearBorder ? 1 : 0) - (a.nearBorder ? 1 : 0) || b.dist - a.dist);
+      let topCount = min(candidates.length, 6);
+      let chosen = candidates[floor(random(topCount))];
+      portalX = chosen.x;
+      portalY = chosen.y;
+      return;
     }
   }
 
-  if (fallback.length > 0) {
-    let f = random(fallback);
-    portalX = f.x;
-    portalY = f.y;
+  // Si el espacio es más compacto, buscar el punto alcanzable más lejano de la pelota
+  let bestReachable = null;
+  let maxDist = -1;
+
+  for (let idx of reachableIndices) {
+    let i = idx % cols;
+    let j = floor(idx / cols);
+    let px = i * paso + paso / 2;
+    let py = j * paso + paso / 2;
+    let d = dist(px, py, ballX, ballY);
+
+    if (d > maxDist && isCircleInsideSet(px, py, PARAMS.ball.ballR * 0.6)) {
+      maxDist = d;
+      bestReachable = { x: px, y: py };
+    }
+  }
+
+  if (bestReachable) {
+    portalX = bestReachable.x;
+    portalY = bestReachable.y;
     return;
   }
 
-  let inside = findNearestInsidePoint(width / 2, height / 2, portalR + 12);
-  portalX = inside.x;
-  portalY = inside.y;
+  // Garantía matemática absoluta: punto accesible más lejano del BFS
+  let lastIdx = reachableIndices[reachableIndices.length - 1];
+  let li = lastIdx % cols;
+  let lj = floor(lastIdx / cols);
+  portalX = li * paso + paso / 2;
+  portalY = lj * paso + paso / 2;
 }
 
 function drawPortal() {
@@ -767,19 +783,30 @@ function drawPortal() {
   let pulse = sin(frameCount * 0.12);
   let pal = PALETTES[PARAMS.fractal.palette] || PALETTES.cyberpunk;
 
+  // Reacción interactiva a la cercanía de la pelota
+  let d = dist(ballX, ballY, portalX, portalY);
+  let proximity = constrain(map(d, 220, 35, 0, 1), 0, 1);
+
   push();
   translate(portalX, portalY);
   noFill();
 
+  // Halo atractor luminoso cuando la pelota se aproxima
+  if (proximity > 0) {
+    stroke(pal.edgeCol[0], pal.edgeCol[1], pal.edgeCol[2], proximity * 80);
+    strokeWeight(1.5);
+    circle(0, 0, (portalR * 2 + 25 + pulse * 8) * (1 + proximity * 0.25));
+  }
+
   for (let k = 3; k > 0; k--) {
-    stroke(pal.edgeCol[0], pal.edgeCol[1], pal.edgeCol[2], 50 + 55 * k);
-    strokeWeight(k * 1.6);
+    stroke(pal.edgeCol[0], pal.edgeCol[1], pal.edgeCol[2], 50 + 55 * k + proximity * 60);
+    strokeWeight(k * (1.6 + proximity * 0.4));
     circle(0, 0, portalR * 2 + k * 8 + pulse * 6);
   }
 
-  rotate(frameCount * 0.05);
+  rotate(frameCount * (0.05 + proximity * 0.05));
   stroke(pal.edgeGlow[0], pal.edgeGlow[1], pal.edgeGlow[2]);
-  strokeWeight(2.5);
+  strokeWeight(2.5 + proximity * 1.5);
   for (let a = 0; a < TWO_PI; a += HALF_PI) {
     arc(0, 0, portalR * 1.3, portalR * 1.3, a, a + 1);
   }
@@ -787,7 +814,7 @@ function drawPortal() {
 }
 
 function checkPortal() {
-  let triggerDist = PARAMS.portal.portalR + PARAMS.ball.ballR * 0.6;
+  let triggerDist = PARAMS.portal.portalR + PARAMS.ball.ballR * 0.7;
   if (dist(ballX, ballY, portalX, portalY) < triggerDist) {
     state = "entrando";
     diveT = 0;
