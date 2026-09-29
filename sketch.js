@@ -1,7 +1,7 @@
 // ==========================================
-// FRACTAL ODYSSEY - ENTRAR EN EL MANDELBROT
-// Pegale a la pelota con la raqueta y metela en el portal.
-// La pelota cae y rebota contra la silueta fractal.
+// FRACTAL ODYSSEY - EL ABISMO INTERIOR
+// Todo el juego ocurre DENTRO de la zona más oscura del conjunto Mandelbrot.
+// Los bordes del fractal actúan como murallas luminosas que rebotan la pelota.
 // ==========================================
 
 // Paletas de color del fractal
@@ -18,10 +18,9 @@ const PALETTES = {
       return [r, g, b];
     },
     core: (ratio, px, py, spd) => {
-      let r = (Math.sin(ratio * 4 + px + spd) + 1) * 55 + 15;
-      let g = (Math.sin(ratio * 3 + py) + 1) * 45 + 15;
-      let b = 50 + ratio * 80;
-      return [r, g, b];
+      // Zona más oscura: interior profundo
+      let glow = (Math.sin(px * 2 + spd) + 1) * 3;
+      return [10 + glow, 8 + glow, 18 + glow];
     }
   },
   fuego: {
@@ -36,10 +35,8 @@ const PALETTES = {
       return [r, g, b];
     },
     core: (ratio, px, py, spd) => {
-      let r = (Math.sin(ratio * 3 + px + spd) + 1) * 50 + 20;
-      let g = (Math.sin(ratio * 2 + py) + 1) * 25 + 10;
-      let b = 15;
-      return [r, g, b];
+      let glow = (Math.sin(px * 2 + spd) + 1) * 4;
+      return [16 + glow, 6, 4];
     }
   },
   oceano: {
@@ -54,10 +51,8 @@ const PALETTES = {
       return [r, g, b];
     },
     core: (ratio, px, py, spd) => {
-      let r = 10;
-      let g = (Math.sin(ratio * 3 + py) + 1) * 35 + 15;
-      let b = 40 + ratio * 60;
-      return [r, g, b];
+      let glow = (Math.sin(py * 2 + spd) + 1) * 4;
+      return [4, 10 + glow, 22 + glow];
     }
   },
   esmeralda: {
@@ -72,10 +67,8 @@ const PALETTES = {
       return [r, g, b];
     },
     core: (ratio, px, py, spd) => {
-      let r = 12;
-      let g = (Math.sin(ratio * 3 + py + spd) + 1) * 45 + 20;
-      let b = 20;
-      return [r, g, b];
+      let glow = (Math.sin(py * 2 + spd) + 1) * 4;
+      return [4, 16 + glow, 8 + glow];
     }
   },
   sunset: {
@@ -90,10 +83,8 @@ const PALETTES = {
       return [r, g, b];
     },
     core: (ratio, px, py, spd) => {
-      let r = (Math.sin(ratio * 3 + px) + 1) * 40 + 20;
-      let g = 15;
-      let b = (Math.sin(ratio * 2 + py + spd) + 1) * 40 + 15;
-      return [r, g, b];
+      let glow = (Math.sin(px * 2 + spd) + 1) * 4;
+      return [14 + glow, 6, 16 + glow];
     }
   },
   cuantico: {
@@ -107,8 +98,8 @@ const PALETTES = {
       return [val, val + tint * 0.4, val + tint];
     },
     core: (ratio, px, py, spd) => {
-      let val = 15 + ratio * 55;
-      return [val, val, val + 15];
+      let glow = (Math.sin(px * 2 + spd) + 1) * 3;
+      return [8 + glow, 10 + glow, 14 + glow];
     }
   }
 };
@@ -120,11 +111,11 @@ const PALETTE_KEYS = Object.keys(PALETTES);
 // ================================
 let PARAMS = {
   fractal: {
-    paso: 4,              // resolución (tamaño de bloque de muestreo)
+    paso: 4,              // resolución de bloques
     maxIterBase: 50,      // iteraciones en el nivel 1
     maxIterPerLevel: 25,  // aumento de iteraciones por nivel
     maxIterCap: 160,      // techo de iteraciones
-    solidThreshold: 0.8,  // porcentaje de iteraciones que define terreno sólido
+    solidThreshold: 0.8,  // define el corte del conjunto interior oscuro
     palette: "cyberpunk", // paleta activa
   },
   zoom: {
@@ -155,9 +146,9 @@ let PARAMS = {
   },
 };
 
-// Coordenadas iniciales cerca del borde (Seahorse Valley / Elephant Valley)
-const START_VALLEY_X = -0.748;
-const START_VALLEY_Y = 0.105;
+// Coordenadas iniciales: dentro de la bahía oscura del Seahorse Valley
+const START_VALLEY_X = -0.738;
+const START_VALLEY_Y = 0.08;
 
 // ================================
 // ESTADO EN TIEMPO REAL
@@ -239,6 +230,12 @@ function windowResized() {
   resizeCanvas(windowWidth, windowHeight);
   resizeFractalBuffers();
   computeFractal();
+  if (!isCircleInsideSet(ballX, ballY, PARAMS.ball.ballR + 4)) {
+    resetBall();
+  }
+  if (!isCircleInsideSet(portalX, portalY, PARAMS.portal.portalR + 8)) {
+    pickPortal();
+  }
 }
 
 function resizeFractalBuffers() {
@@ -246,7 +243,6 @@ function resizeFractalBuffers() {
   cols = ceil(width / paso);
   rows = ceil(height / paso);
   iters = new Int16Array(cols * rows);
-  // Imagen de resolución interna coincidente con cols/rows para máxima velocidad
   fractalImage = createImage(cols, rows);
 }
 
@@ -262,7 +258,7 @@ function resetGame() {
   lives = PARAMS.game.startLives;
   viewX = START_VALLEY_X;
   viewY = START_VALLEY_Y;
-  // Zoom inicial cercano al borde para alta riqueza visual desde el nivel 1
+  // Zoom que enmarca la bahía interior oscura con sus bordes circundantes
   viewScale = 0.55 / min(width, height);
   maxIterations = iterCapForLevel(level);
   state = "jugando";
@@ -271,7 +267,7 @@ function resetGame() {
   pickPortal();
 }
 
-// Asienta la vista cerca del borde
+// Asienta la vista para que el juego siempre ocurra en los bordes del fractal
 function settleView() {
   for (let k = 0; k < 12; k++) {
     if (!driftViewLite()) break;
@@ -321,9 +317,11 @@ function driftViewLite() {
 }
 
 // ================================
-// DETECCIÓN, PREVENCIÓN Y CAÍDA EN BORDES
+// DETECCIÓN DEL CONJUNTO OSCURO Y BORDES
 // ================================
-function isFractalSolid(px, py) {
+
+// Evalúa si un punto de pantalla está DENTRO del conjunto (la zona oscura donde ocurre el juego)
+function isInsideSet(px, py) {
   let paso = PARAMS.fractal.paso;
   let i = floor(px / paso);
   let j = floor(py / paso);
@@ -340,21 +338,21 @@ function getFractalVal(px, py) {
   return iters[i + j * cols];
 }
 
-// Verifica que un círculo con centro (cx, cy) y radio r esté 100% en espacio libre (fuera del conjunto)
-function isCircleClear(cx, cy, r) {
+// Verifica que un círculo con centro (cx, cy) y radio r esté 100% dentro de la zona oscura
+function isCircleInsideSet(cx, cy, r) {
   if (cx - r < 10 || cx + r > width - 10 || cy - r < 10 || cy + r > height - 10) return false;
-  if (isFractalSolid(cx, cy)) return false;
+  if (!isInsideSet(cx, cy)) return false;
   for (let a = 0; a < TWO_PI; a += PI / 6) {
     let cosA = cos(a);
     let sinA = sin(a);
-    if (isFractalSolid(cx + cosA * r, cy + sinA * r)) return false;
-    if (isFractalSolid(cx + cosA * (r * 0.5), cy + sinA * (r * 0.5))) return false;
+    if (!isInsideSet(cx + cosA * r, cy + sinA * r)) return false;
+    if (!isInsideSet(cx + cosA * (r * 0.5), cy + sinA * (r * 0.5))) return false;
   }
   return true;
 }
 
-// Encuentra el punto despejado más cercano en caso de quedar atrapado dentro del fractal
-function findNearestFreePoint(startX, startY, clearR) {
+// Encuentra el punto interior más cercano en caso de salirse del conjunto oscuro
+function findNearestInsidePoint(startX, startY, clearR) {
   let paso = PARAMS.fractal.paso;
   let rTest = clearR || (PARAMS.ball.ballR + 6);
   let maxR = ceil(350 / paso);
@@ -366,7 +364,7 @@ function findNearestFreePoint(startX, startY, clearR) {
         let px = startX + di * paso;
         let py = startY + dj * paso;
         if (px >= 40 && px <= width - 40 && py >= 40 && py <= height - 60) {
-          if (isCircleClear(px, py, rTest)) {
+          if (isCircleInsideSet(px, py, rTest)) {
             return { x: px, y: py };
           }
         }
@@ -376,8 +374,7 @@ function findNearestFreePoint(startX, startY, clearR) {
   return { x: width / 2, y: height / 2 };
 }
 
-// Encuentra una brecha vertical de aire libre con una superficie fractal debajo
-// garantizando que la pelota NUNCA arranque dentro del conjunto
+// Encuentra un punto de caída dentro de la zona oscura pero cercano a un borde del fractal
 function findEdgeDropPoint() {
   let paso = PARAMS.fractal.paso;
   let ballR = PARAMS.ball.ballR;
@@ -386,76 +383,72 @@ function findEdgeDropPoint() {
   let minI = floor(80 / paso);
   let maxI = floor((width - 80) / paso);
 
+  // Escanear columnas buscando tramos dentro del conjunto oscuro que terminen en un borde inferior
   for (let i = minI; i < maxI; i += 2) {
     let x = i * paso + paso / 2;
-    let inAir = false;
-    let airStartY = 0;
+    let inDark = false;
+    let darkStartY = 0;
 
     for (let j = floor(40 / paso); j < floor((height - 70) / paso); j++) {
       let y = j * paso + paso / 2;
-      let solid = isFractalSolid(x, y);
+      let inside = isInsideSet(x, y);
 
-      if (!solid) {
-        if (!inAir) {
-          inAir = true;
-          airStartY = y;
+      if (inside) {
+        if (!inDark) {
+          inDark = true;
+          darkStartY = y;
         }
       } else {
-        if (inAir) {
-          // Fin de la brecha de aire: se topa con la superficie fractal en y
-          let airGap = y - airStartY;
-          // Se requiere suficiente espacio de caída despejada
-          if (airGap >= 85) {
-            // El spawn se sitúa en la parte superior del aire libre, con espacio seguro respecto al techo
-            let spawnY = airStartY + safeR + 15;
-            // Confirmar que todo el volumen de la pelota esté en aire libre
-            if (isCircleClear(x, spawnY, safeR)) {
+        if (inDark) {
+          // Borde inferior del conjunto oscuro en y
+          let spanHeight = y - darkStartY;
+          if (spanHeight >= 85) {
+            let spawnY = darkStartY + safeR + 15;
+            if (isCircleInsideSet(x, spawnY, safeR)) {
               candidates.push({
                 x: x,
                 y: spawnY,
                 targetY: y,
-                airGap: airGap,
+                span: spanHeight,
               });
             }
           }
-          inAir = false;
+          inDark = false;
         }
       }
     }
   }
 
   if (candidates.length > 0) {
-    // Ordenar para favorecer caídas amplias y despejadas
-    candidates.sort((a, b) => b.airGap - a.airGap);
+    candidates.sort((a, b) => b.span - a.span);
     let topCount = min(candidates.length, 5);
     return candidates[floor(random(topCount))];
   }
 
-  // Respaldo de seguridad en caso de no hallar brecha en las columnas muestreadas
+  // Respaldo: cualquier punto dentro del conjunto en la parte media superior
   for (let tries = 0; tries < 40; tries++) {
     let rx = random(100, width - 100);
     let ry = random(60, height * 0.45);
-    if (isCircleClear(rx, ry, safeR + 10)) {
-      return { x: rx, y: ry, targetY: height * 0.7 };
+    if (isCircleInsideSet(rx, ry, safeR + 8)) {
+      return { x: rx, y: ry, targetY: height * 0.75 };
     }
   }
 
-  let free = findNearestFreePoint(width / 2, height / 3, safeR);
-  return { x: free.x, y: free.y, targetY: height * 0.7 };
+  let inside = findNearestInsidePoint(width / 2, height / 3, safeR);
+  return { x: inside.x, y: inside.y, targetY: height * 0.75 };
 }
 
 function resetBall() {
   let drop = findEdgeDropPoint();
   ballX = drop.x;
   ballY = drop.y;
-  ballVx = random(-0.2, 0.2); // caída recta sobre el borde
-  ballVy = 0.8;                 // impulso inicial hacia abajo
+  ballVx = random(-0.2, 0.2); // caída dentro del conjunto oscuro
+  ballVy = 0.8;               // impulso inicial hacia el borde
 
-  // Verificación estricta anti-atasco: jamás arrancar dentro del conjunto
-  if (!isCircleClear(ballX, ballY, PARAMS.ball.ballR + 4)) {
-    let free = findNearestFreePoint(ballX, ballY, PARAMS.ball.ballR + 6);
-    ballX = free.x;
-    ballY = free.y;
+  if (!isCircleInsideSet(ballX, ballY, PARAMS.ball.ballR + 4)) {
+    let inside = findNearestInsidePoint(ballX, ballY, PARAMS.ball.ballR + 6);
+    ballX = inside.x;
+    ballY = inside.y;
   }
 
   spawnDropIndicator(ballX, ballY, drop.targetY);
@@ -474,7 +467,6 @@ function draw() {
   }
 
   paintFractal();
-  // Escalado acelerado por GPU en pantalla completa
   image(fractalImage, 0, 0, width, height);
 
   updateAndDrawBounceEffects();
@@ -542,11 +534,11 @@ function paintFractal() {
 
     for (let i = 0; i < cols; i++) {
       let n = iters[i + rowIdx];
-      let isSolid = n >= solidLimit;
+      let isInside = n >= solidLimit;
 
-      // Detección ágil de contorno del terreno sólido
+      // El borde es la frontera entre la zona oscura y el halo exterior
       let isEdge = false;
-      if (isSolid) {
+      if (isInside) {
         if (
           i === 0 || i === cols - 1 || j === 0 || j === rows - 1 ||
           iters[(i + 1) + rowIdx] < solidLimit ||
@@ -562,16 +554,19 @@ function paintFractal() {
       let r, g, bl;
 
       if (isEdge) {
+        // Muro luminoso pulsante (borde del fractal que rebota la pelota)
         let edgePulse = sin(frameCount * 0.08 + (i + j) * 0.14) * 0.5 + 0.5;
         r = lerp(pal.edgeCol[0], pal.edgeGlow[0], edgePulse);
         g = lerp(pal.edgeCol[1], pal.edgeGlow[1], edgePulse);
         bl = lerp(pal.edgeCol[2], pal.edgeGlow[2], edgePulse);
-      } else if (isSolid) {
-        let core = pal.core(ratio, px, py, speedFactor);
-        r = core[0];
-        g = core[1];
-        bl = core[2];
+      } else if (isInside) {
+        // LA ZONA MÁS OSCURA: El interior del conjunto donde vive el juego
+        let dark = pal.core(ratio, px, py, speedFactor);
+        r = dark[0];
+        g = dark[1];
+        bl = dark[2];
       } else {
+        // Exterior luminoso del fractal
         let col = pal.calc(ratio, px, py, speedFactor);
         r = col[0];
         g = col[1];
@@ -588,7 +583,7 @@ function paintFractal() {
   fractalImage.updatePixels();
 }
 
-// Encuadre en el borde durante la zambullida
+// Encuadre sobre el borde del fractal
 function localVariance(ci, cj, radius) {
   let count = 0, sum = 0, sumSq = 0;
   for (let dj = -radius; dj <= radius; dj++) {
@@ -645,8 +640,8 @@ function enforceEdgeFraming() {
 // PORTAL Y VERIFICACIÓN DE ALCANCE (REACHABILITY)
 // ================================
 
-// Calcula mediante BFS qué celdas de aire libre están conectadas por un camino
-// transitable por la pelota desde (startX, startY)
+// Calcula mediante BFS qué celdas del conjunto oscuro están conectadas
+// por un camino navegable desde (startX, startY)
 function computeReachableMask(startX, startY) {
   let paso = PARAMS.fractal.paso;
   let mask = new Uint8Array(cols * rows);
@@ -682,7 +677,8 @@ function computeReachableMask(startX, startY) {
         let npx = ni * paso + paso / 2;
         let npy = nj * paso + paso / 2;
 
-        if (!isFractalSolid(npx, npy) && isCircleClear(npx, npy, navR)) {
+        // La pelota se desplaza dentro de la zona oscura
+        if (isInsideSet(npx, npy) && isCircleInsideSet(npx, npy, navR)) {
           mask[nIdx] = 1;
           queue.push(nIdx);
         }
@@ -693,13 +689,10 @@ function computeReachableMask(startX, startY) {
   return mask;
 }
 
-// Selecciona la posición del portal garantizando que pertenezca al espacio
-// aéreo transitable por la pelota (nunca en cuevas o lagos cerrados)
 function pickPortal() {
   let paso = PARAMS.fractal.paso;
   let portalR = PARAMS.portal.portalR;
 
-  // Calcular la máscara de alcance desde la posición actual de la pelota
   let reachableMask = computeReachableMask(ballX, ballY);
 
   let candidates = [];
@@ -711,23 +704,20 @@ function pickPortal() {
   let minI = floor(100 / paso);
   let maxI = floor((width - 100) / paso);
 
-  // Distancia mínima respecto al spawn para evitar que se meta al nacer
   let minBallDist = max(140, min(width, height) * 0.28);
 
   for (let j = minJ; j < maxJ; j += 2) {
     let rowIdx = j * cols;
     for (let i = minI; i < maxI; i += 2) {
       let idx = i + rowIdx;
-      // DEBE ser alcanzable por la pelota mediante aire continuo
       if (reachableMask[idx] === 1) {
         let px = i * paso + paso / 2;
         let py = j * paso + paso / 2;
         let d = dist(px, py, ballX, ballY);
 
         if (d >= minBallDist) {
-          if (isCircleClear(px, py, portalR + 10)) {
+          if (isCircleInsideSet(px, py, portalR + 10)) {
             let n = iters[idx];
-            // Bonificación estética si está cerca de la costa fractal
             let score = (n >= minN && n <= maxN) ? 2 : 1;
             candidates.push({ x: px, y: py, dist: d, score: score });
           }
@@ -745,7 +735,6 @@ function pickPortal() {
     return;
   }
 
-  // Respaldo en cualquier punto alcanzable con distancia segura
   let fallback = [];
   for (let idx = 0; idx < reachableMask.length; idx++) {
     if (reachableMask[idx] === 1) {
@@ -754,7 +743,7 @@ function pickPortal() {
       if (i >= minI && i <= maxI && j >= minJ && j <= maxJ) {
         let px = i * paso + paso / 2;
         let py = j * paso + paso / 2;
-        if (dist(px, py, ballX, ballY) > 100 && isCircleClear(px, py, portalR + 6)) {
+        if (dist(px, py, ballX, ballY) > 100 && isCircleInsideSet(px, py, portalR + 6)) {
           fallback.push({ x: px, y: py });
         }
       }
@@ -768,9 +757,9 @@ function pickPortal() {
     return;
   }
 
-  let free = findNearestFreePoint(width / 2, height / 2, portalR + 12);
-  portalX = free.x;
-  portalY = free.y;
+  let inside = findNearestInsidePoint(width / 2, height / 2, portalR + 12);
+  portalX = inside.x;
+  portalY = inside.y;
 }
 
 function drawPortal() {
@@ -848,7 +837,7 @@ function updateDive() {
 }
 
 // ================================
-// FÍSICA Y REBOTE DE LA PELOTA
+// FÍSICA Y REBOTE DE LA PELOTA EN LOS BORDES
 // ================================
 function updateBall() {
   let ballR = PARAMS.ball.ballR;
@@ -863,7 +852,7 @@ function updateBall() {
     ballX += ballVx / subSteps;
     ballY += ballVy / subSteps;
 
-    // Paredes y techo
+    // Paredes del canvas
     if (ballX < ballR) {
       ballVx = abs(ballVx);
       ballX = ballR;
@@ -876,11 +865,11 @@ function updateBall() {
       ballY = ballR;
     }
 
-    // Colisión física contra bordes del fractal
+    // Colisión física contra los bordes luminosos del fractal
     checkFractalCollision();
   }
 
-  // Suelo (pérdida de vida)
+  // Pérdida de vida si cae fuera por el fondo
   if (ballY > height - ballR) {
     lives--;
     flash = 150;
@@ -897,22 +886,22 @@ function checkFractalCollision() {
   let ballR = PARAMS.ball.ballR;
   let bounciness = PARAMS.ball.bounciness || 0.8;
 
-  // RECUPERACIÓN / EXPULSIÓN DE EMERGENCIA:
-  // Si la pelota llega a quedar dentro del conjunto fractal, se expulsa de inmediato al espacio abierto
-  if (isFractalSolid(ballX, ballY)) {
-    let free = findNearestFreePoint(ballX, ballY, ballR + 6);
-    let dirX = free.x - ballX;
-    let dirY = free.y - ballY;
+  // RECUPERACIÓN DE EMERGENCIA:
+  // Si la pelota sale del conjunto oscuro hacia el exterior, se devuelve de inmediato al interior
+  if (!isInsideSet(ballX, ballY)) {
+    let insidePt = findNearestInsidePoint(ballX, ballY, ballR + 6);
+    let dirX = insidePt.x - ballX;
+    let dirY = insidePt.y - ballY;
     let d = sqrt(dirX * dirX + dirY * dirY);
     if (d > 0) {
       dirX /= d;
       dirY /= d;
     } else {
       dirX = 0;
-      dirY = -1;
+      dirY = 1;
     }
-    ballX = free.x;
-    ballY = free.y;
+    ballX = insidePt.x;
+    ballY = insidePt.y;
     ballVx = dirX * max(abs(ballVx), 4.5);
     ballVy = dirY * max(abs(ballVy), 4.5);
     spawnFractalBounceEffect(ballX, ballY, dirX, dirY);
@@ -929,9 +918,10 @@ function checkFractalCollision() {
     let ang = (k * TWO_PI) / samples;
     let sx = ballX + cos(ang) * ballR;
     let sy = ballY + sin(ang) * ballR;
-    if (isFractalSolid(sx, sy)) {
+    // Si la muestra perimetral toca el exterior del conjunto, colisiona con el borde
+    if (!isInsideSet(sx, sy)) {
       hits++;
-      normX -= cos(ang);
+      normX -= cos(ang); // Vector hacia el centro de la pelota = hacia adentro del conjunto
       normY -= sin(ang);
     }
   }
@@ -940,18 +930,18 @@ function checkFractalCollision() {
     let d = sqrt(normX * normX + normY * normY);
     if (d < 0.0001) {
       normX = 0;
-      normY = -1;
+      normY = 1;
     } else {
       normX /= d;
       normY /= d;
     }
 
-    // Separación para no incrustarse en la roca fractal
+    // Separación para mantener la pelota dentro de la zona oscura
     let pushDist = map(min(hits, samples), 1, samples, 1.2, ballR * 0.45);
     ballX += normX * pushDist;
     ballY += normY * pushDist;
 
-    // Vector de velocidad relativa contra la normal
+    // Vector de velocidad relativa contra la normal del borde
     let vn = ballVx * normX + ballVy * normY;
     if (vn < 0) {
       ballVx -= (1 + bounciness) * vn * normX;
@@ -1265,10 +1255,6 @@ function drawEndScreen() {
 
 function mousePressed() {
   getAudioContextSafe();
-  let panel = document.getElementById("paramPanel");
-  let btn = document.getElementById("togglePanelBtn");
-
-  // Si se hizo click fuera del panel y estaba abierto, o para reiniciar juego
   if (state === "ganaste" || state === "perdiste") {
     resetGame();
   }
@@ -1305,7 +1291,7 @@ const PARAM_DEFS = [
     onChange: function () { maxIterations = iterCapForLevel(level); computeFractal(); } },
   { group: "fractal", key: "maxIterPerLevel", label: "Iteraciones x nivel", min: 0, max: 60, step: 5 },
   { group: "fractal", key: "maxIterCap", label: "Tope de iteraciones", min: 60, max: 400, step: 10 },
-  { group: "fractal", key: "solidThreshold", label: "Umbral sólido borde", min: 0.5, max: 0.95, step: 0.05,
+  { group: "fractal", key: "solidThreshold", label: "Umbral zona oscura", min: 0.5, max: 0.95, step: 0.05,
     onChange: function () { computeFractal(); } },
 
   { group: "zoom", key: "zoomPerLevel", label: "Zoom por portal", min: 5, max: 200, step: 5 },
@@ -1319,7 +1305,7 @@ const PARAM_DEFS = [
   { group: "ball", key: "gravity", label: "Gravedad", min: 0, max: 0.5, step: 0.01 },
   { group: "ball", key: "friction", label: "Fricción", min: 0.95, max: 1, step: 0.001 },
   { group: "ball", key: "maxSpeed", label: "Velocidad max.", min: 6, max: 30, step: 1 },
-  { group: "ball", key: "bounciness", label: "Rebote en fractal", min: 0.2, max: 1.0, step: 0.05 },
+  { group: "ball", key: "bounciness", label: "Rebote en bordes", min: 0.2, max: 1.0, step: 0.05 },
 
   { group: "racket", key: "batR", label: "Radio raqueta", min: 14, max: 50, step: 1 },
 
@@ -1365,23 +1351,18 @@ function cyclePalette() {
 }
 
 function buildSliderPanel() {
-  // Botón flotante para abrir/ocultar el panel
   let toggleBtn = createButton("⚙️ Ajustes (H)").id("togglePanelBtn");
   toggleBtn.mousePressed(() => togglePanel());
 
-  // Panel contenedor lateral oculto por defecto
   let panel = createDiv("").id("paramPanel").addClass("panel-hidden");
 
-  // Encabezado
   let header = createDiv("").class("panelHeader").parent(panel);
   let title = createDiv("<span>🎮 Centro de Control</span>").class("panelTitle").parent(header);
   let closeBtn = createButton("✕").class("panelCloseBtn").parent(header);
   closeBtn.mousePressed(() => togglePanel(false));
 
-  // Cuerpo scrollable
   let body = createDiv("").class("panelBody").parent(panel);
 
-  // Selector de Paletas de Color
   let palSection = createDiv("").class("paletteSection").parent(body);
   createElement("div", "🎨 Paleta de Color").class("sectionHeader").parent(palSection);
   let palGrid = createDiv("").class("paletteGrid").parent(palSection);
@@ -1399,7 +1380,6 @@ function buildSliderPanel() {
     btn.mousePressed(() => setPalette(key));
   }
 
-  // Grupos de sliders
   let groupDivs = {};
   for (let g in GROUP_LABELS) {
     let gd = createDiv("").class("paramGroup").parent(body);
@@ -1422,7 +1402,6 @@ function buildSliderPanel() {
     });
   }
 
-  // Pie con botones de acción rápida
   let footer = createDiv("").class("panelFooter").parent(panel);
   let fsBtn = createButton("⛶ Pantalla Completa").class("panelActionBtn").parent(footer);
   fsBtn.mousePressed(() => {
