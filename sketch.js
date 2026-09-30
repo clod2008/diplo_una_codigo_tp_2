@@ -119,7 +119,7 @@ let PARAMS = {
     palette: "cyberpunk", // paleta activa
   },
   zoom: {
-    zoomPerLevel: 60,     // aumento de zoom por portal
+    zoomPerLevel: 12,     // aumento equilibrado de zoom por nivel (mantiene los bordes en pantalla)
     diveFrames: 160,      // duración en frames de la inmersión
   },
   edge: {
@@ -139,6 +139,7 @@ let PARAMS = {
   },
   portal: {
     portalR: 24,
+    edgeDistance: 18,     // distancia deseada al borde del fractal (portal adherido al borde)
   },
   game: {
     finalLevel: 5,
@@ -166,6 +167,9 @@ let ballX, ballY, ballVx, ballVy;
 let swing = 0;
 
 let portalX, portalY;
+let portalEdgeX, portalEdgeY;
+let portalEdgePoints = [];
+let portalParticles = [];
 
 let level = 1;
 let lives = 3;
@@ -223,6 +227,7 @@ function setup() {
   textFont("Outfit, sans-serif");
   resizeFractalBuffers();
   buildSliderPanel();
+  initPortalParticles();
   resetGame();
 }
 
@@ -233,7 +238,7 @@ function windowResized() {
   if (!isCircleInsideSet(ballX, ballY, PARAMS.ball.ballR + 4)) {
     resetBall();
   }
-  if (!isCircleInsideSet(portalX, portalY, PARAMS.portal.portalR + 8)) {
+  if (!isCircleInsideSet(portalX, portalY, PARAMS.ball.ballR + 2) || !isInsideSet(portalX, portalY)) {
     pickPortal();
   }
 }
@@ -269,51 +274,86 @@ function resetGame() {
 
 // Asienta la vista para que el juego siempre ocurra en los bordes del fractal
 function settleView() {
-  for (let k = 0; k < 12; k++) {
-    if (!driftViewLite()) break;
-  }
+  computeFractal();
+  centerOnFractalBoundary();
   computeFractal();
 }
 
-function driftViewLite() {
-  let radius = 5;
+// Encuadra la cámara automáticamente sobre la frontera real del fractal para evitar vacíos
+function centerOnFractalBoundary() {
   let paso = PARAMS.fractal.paso;
-  let step = paso * 2;
-  let n = 0, sum = 0, sumSq = 0;
-  let samples = [];
+  let solidLimit = maxIterations * PARAMS.fractal.solidThreshold;
+  let edgePoints = [];
 
-  for (let dj = -radius; dj <= radius; dj++) {
-    for (let di = -radius; di <= radius; di++) {
-      let ca = viewX + di * step * viewScale;
-      let cb = viewY + dj * step * viewScale;
-      let v = mandel(ca, cb);
-      samples.push({ di: di, dj: dj, v: v });
-      sum += v;
-      sumSq += v * v;
-      n++;
+  for (let j = 1; j < rows - 1; j++) {
+    let rIdx = j * cols;
+    let prevR = (j - 1) * cols;
+    let nextR = (j + 1) * cols;
+    for (let i = 1; i < cols - 1; i++) {
+      let idx = i + rIdx;
+      if (iters[idx] >= solidLimit) {
+        if (
+          iters[idx - 1] < solidLimit ||
+          iters[idx + 1] < solidLimit ||
+          iters[i + prevR] < solidLimit ||
+          iters[i + nextR] < solidLimit
+        ) {
+          edgePoints.push({ i: i, j: j });
+        }
+      }
     }
   }
 
-  let mean = sum / n;
-  let variance = sumSq / n - mean * mean;
-  if (variance >= PARAMS.edge.minVariance) return false;
-
-  let best = null;
-  let bestScore = -1;
-  for (let s of samples) {
-    let score = Math.abs(s.v - mean);
-    if (score > bestScore) {
-      bestScore = score;
-      best = s;
+  // 1. Si hay bordes visibles en pantalla: centrar la vista en ellos si están muy desplazados
+  if (edgePoints.length > 0) {
+    let sumI = 0, sumJ = 0;
+    for (let pt of edgePoints) {
+      sumI += pt.i;
+      sumJ += pt.j;
     }
-  }
-  if (!best) return false;
+    let avgI = sumI / edgePoints.length;
+    let avgJ = sumJ / edgePoints.length;
+    let centerI = cols / 2;
+    let centerJ = rows / 2;
 
-  let dx = best.di * step * viewScale;
-  let dy = best.dj * step * viewScale;
-  viewX += dx * PARAMS.edge.driftStrength;
-  viewY += dy * PARAMS.edge.driftStrength;
-  return true;
+    let dI = avgI - centerI;
+    let dJ = avgJ - centerJ;
+    let distFromCenter = dist(avgI, avgJ, centerI, centerJ);
+
+    if (distFromCenter > cols * 0.12) {
+      viewX += dI * paso * viewScale * 0.75;
+      viewY += dJ * paso * viewScale * 0.75;
+      computeFractal();
+    }
+    return;
+  }
+
+  // 2. Si la pantalla quedó completamente vacía (100% negra o 100% exterior):
+  // Buscar en espiral la frontera fractal más cercana en el plano complejo
+  let found = false;
+  let searchStep = paso * 6 * viewScale;
+  for (let r = 1; r <= 35; r++) {
+    for (let a = 0; a < TWO_PI; a += PI / 6) {
+      let testCa = viewX + cos(a) * r * searchStep;
+      let testCb = viewY + sin(a) * r * searchStep;
+      let n = mandel(testCa, testCb);
+      if (n < solidLimit) { // Encontró el exterior luminoso
+        viewX = (viewX + testCa) * 0.5;
+        viewY = (viewY + testCb) * 0.5;
+        found = true;
+        break;
+      }
+    }
+    if (found) break;
+  }
+
+  if (found) {
+    computeFractal();
+  } else {
+    // Si aún no se encuentra, retroceder un poco el zoom para encuadrar la estructura
+    viewScale *= 1.8;
+    computeFractal();
+  }
 }
 
 // ================================
@@ -519,6 +559,9 @@ function mandel(ca, cb) {
 }
 
 function paintFractal() {
+  let paso = PARAMS.fractal.paso;
+  let pX = (typeof portalX !== "undefined" && portalX !== null) ? portalX : (width / 2);
+  let pY = (typeof portalY !== "undefined" && portalY !== null) ? portalY : (height / 2);
   fractalImage.loadPixels();
   let pix = fractalImage.pixels;
   let speedFactor = map(abs(ballVx) + abs(ballVy), 0, 15, 0, 1);
@@ -556,9 +599,23 @@ function paintFractal() {
       if (isEdge) {
         // Muro luminoso pulsante (borde del fractal que rebota la pelota)
         let edgePulse = sin(frameCount * 0.08 + (i + j) * 0.14) * 0.5 + 0.5;
-        r = lerp(pal.edgeCol[0], pal.edgeGlow[0], edgePulse);
-        g = lerp(pal.edgeCol[1], pal.edgeGlow[1], edgePulse);
-        bl = lerp(pal.edgeCol[2], pal.edgeGlow[2], edgePulse);
+
+        // Resonancia y excitación eléctrica en el borde del fractal cercano al portal
+        let dxP = (i * paso + paso / 2) - pX;
+        let dyP = (j * paso + paso / 2) - pY;
+        let dPortalSq = dxP * dxP + dyP * dyP;
+        if (dPortalSq < 22500) { // Radio de excitación de 150px
+          let pInf = 1 - Math.sqrt(dPortalSq) / 150;
+          let fastPulse = Math.sin(frameCount * 0.22 + (i - j) * 0.25) * 0.5 + 0.5;
+          let bright = edgePulse * (1 - pInf * 0.4) + fastPulse * (pInf * 0.9);
+          r = lerp(pal.edgeCol[0], 255, pInf * 0.75);
+          g = lerp(pal.edgeCol[1], pal.edgeGlow[1], bright);
+          bl = lerp(pal.edgeCol[2], pal.edgeGlow[2], bright);
+        } else {
+          r = lerp(pal.edgeCol[0], pal.edgeGlow[0], edgePulse);
+          g = lerp(pal.edgeCol[1], pal.edgeGlow[1], edgePulse);
+          bl = lerp(pal.edgeCol[2], pal.edgeGlow[2], edgePulse);
+        }
       } else if (isInside) {
         // LA ZONA MÁS OSCURA: El interior del conjunto donde vive el juego
         let dark = pal.core(ratio, px, py, speedFactor);
@@ -689,127 +746,485 @@ function computeReachableMask(startX, startY) {
   return { mask: mask, reachableIndices: queue };
 }
 
-// Selecciona la posición del portal garantizando al 100% que sea accesible por la pelota
+// ================================
+// DISTANCIA A LOS BORDES DEL FRACTAL
+// ================================
+
+// Calcula la distancia exacta en píxeles y el punto más cercano de la frontera luminosa del fractal
+function computeFractalEdgeDistanceGrid() {
+  let paso = PARAMS.fractal.paso;
+  let solidLimit = maxIterations * PARAMS.fractal.solidThreshold;
+  let totalCells = cols * rows;
+  let distGrid = new Int16Array(totalCells);
+  let nearestEdge = new Int32Array(totalCells);
+  distGrid.fill(-1);
+  nearestEdge.fill(-1);
+
+  let queue = new Int32Array(totalCells);
+  let head = 0;
+  let tail = 0;
+
+  // 1. Identificar todas las celdas interiores que tocan el exterior del fractal
+  for (let j = 0; j < rows; j++) {
+    let rowIdx = j * cols;
+    let prevRowIdx = (j - 1) * cols;
+    let nextRowIdx = (j + 1) * cols;
+
+    for (let i = 0; i < cols; i++) {
+      let idx = i + rowIdx;
+      if (iters[idx] >= solidLimit) {
+        let isEdge = false;
+        // Solo vecinos dentro de los límites del canvas (frontera real con el exterior del fractal)
+        if (i > 0 && iters[idx - 1] < solidLimit) isEdge = true;
+        else if (i < cols - 1 && iters[idx + 1] < solidLimit) isEdge = true;
+        else if (j > 0 && iters[i + prevRowIdx] < solidLimit) isEdge = true;
+        else if (j < rows - 1 && iters[i + nextRowIdx] < solidLimit) isEdge = true;
+        else if (i > 0 && j > 0 && iters[(i - 1) + prevRowIdx] < solidLimit) isEdge = true;
+        else if (i < cols - 1 && j > 0 && iters[(i + 1) + prevRowIdx] < solidLimit) isEdge = true;
+        else if (i > 0 && j < rows - 1 && iters[(i - 1) + nextRowIdx] < solidLimit) isEdge = true;
+        else if (i < cols - 1 && j < rows - 1 && iters[(i + 1) + nextRowIdx] < solidLimit) isEdge = true;
+
+        if (isEdge) {
+          distGrid[idx] = 0;
+          nearestEdge[idx] = idx;
+          queue[tail++] = idx;
+        }
+      }
+    }
+  }
+
+  if (tail === 0) return null;
+
+  // 2. Propagación BFS de distancia por toda la bahía oscura
+  while (head < tail) {
+    let curr = queue[head++];
+    let cd = distGrid[curr];
+    let src = nearestEdge[curr];
+    let ci = curr % cols;
+    let cj = floor(curr / cols);
+
+    let neighbors = [
+      ci > 0 ? curr - 1 : -1,
+      ci < cols - 1 ? curr + 1 : -1,
+      cj > 0 ? curr - cols : -1,
+      cj < rows - 1 ? curr + cols : -1,
+    ];
+
+    for (let k = 0; k < 4; k++) {
+      let nIdx = neighbors[k];
+      if (nIdx !== -1 && distGrid[nIdx] === -1) {
+        distGrid[nIdx] = cd + 1;
+        nearestEdge[nIdx] = src;
+        queue[tail++] = nIdx;
+      }
+    }
+  }
+
+  return { distGrid: distGrid, nearestEdge: nearestEdge };
+}
+
+// Recolecta puntos del contorno del fractal cercanos al portal para anclajes visuales
+function collectNearbyEdgePoints(distGrid) {
+  portalEdgePoints = [];
+  let paso = PARAMS.fractal.paso;
+
+  if (distGrid) {
+    let searchBox = ceil(120 / paso);
+    let cI = floor(portalX / paso);
+    let cJ = floor(portalY / paso);
+
+    for (let dj = -searchBox; dj <= searchBox; dj++) {
+      let j = cJ + dj;
+      if (j < 0 || j >= rows) continue;
+      let rIdx = j * cols;
+      for (let di = -searchBox; di <= searchBox; di++) {
+        let i = cI + di;
+        if (i < 0 || i >= cols) continue;
+        let idx = i + rIdx;
+        if (distGrid[idx] === 0) { // Celda en la frontera luminosa del fractal
+          let ex = i * paso + paso / 2;
+          let ey = j * paso + paso / 2;
+          let d = dist(ex, ey, portalX, portalY);
+          if (d <= 140) {
+            portalEdgePoints.push({ x: ex, y: ey, d: d });
+          }
+        }
+      }
+    }
+  }
+
+  portalEdgePoints.sort((a, b) => a.d - b.d);
+
+  // Garantizar que siempre haya al menos el anclaje principal para rayos y partículas
+  if (portalEdgePoints.length === 0 && portalEdgeX !== undefined) {
+    portalEdgePoints.push({ x: portalEdgeX, y: portalEdgeY, d: dist(portalX, portalY, portalEdgeX, portalEdgeY) });
+  }
+}
+
+// Inicializa las partículas del flujo de acreción que espiralan desde la pared hacia el portal
+function initPortalParticles() {
+  portalParticles = [];
+  for (let k = 0; k < 28; k++) {
+    portalParticles.push({
+      progress: random(0, 1),
+      spiralSpeed: random(0.012, 0.024),
+      rotOffset: random(-0.9, 0.9),
+      size: random(1.6, 3.4),
+      ptIndex: floor(random(0, 6)),
+    });
+  }
+}
+
+function updateAndDrawPortalParticles(pal, proximity) {
+  if (!portalEdgePoints || portalEdgePoints.length === 0) return;
+
+  noStroke();
+  for (let p of portalParticles) {
+    p.progress += p.spiralSpeed * (1 + proximity * 0.8);
+    if (p.progress >= 1) {
+      p.progress = 0;
+      p.rotOffset = random(-0.9, 0.9);
+      p.ptIndex = floor(random(0, portalEdgePoints.length));
+    }
+
+    let originPt = portalEdgePoints[p.ptIndex % portalEdgePoints.length] || portalEdgePoints[0];
+    let t = p.progress;
+
+    // Trayectoria espiral desde el punto de origen en la pared hasta el portal
+    let baseAngle = atan2(originPt.y - portalY, originPt.x - portalX);
+    let totalDist = dist(portalX, portalY, originPt.x, originPt.y);
+    let curDist = lerp(totalDist, 0, t);
+    let curAngle = baseAngle + p.rotOffset + t * PI * 1.8;
+
+    let px = portalX + cos(curAngle) * curDist;
+    let py = portalY + sin(curAngle) * curDist;
+
+    let pAlpha = sin(t * PI) * (180 + proximity * 75);
+    let pSize = p.size * (1 - t * 0.4);
+
+    fill(
+      lerp(pal.edgeCol[0], pal.edgeGlow[0], t),
+      lerp(pal.edgeCol[1], pal.edgeGlow[1], t),
+      lerp(pal.edgeCol[2], pal.edgeGlow[2], t),
+      pAlpha
+    );
+    circle(px, py, pSize * 2);
+  }
+}
+
+// Selecciona la posición del portal garantizando que SIEMPRE esté adherido a los bordes del fractal
 function pickPortal() {
   let paso = PARAMS.fractal.paso;
-  let portalR = PARAMS.portal.portalR;
+  let targetEdgeDist = PARAMS.portal.edgeDistance || 18;
 
   // 1. Obtener todas las celdas conectadas y navegables desde la pelota
   let reach = computeReachableMask(ballX, ballY);
   let reachableIndices = reach.reachableIndices;
 
-  let minJ = floor(90 / paso);
-  let maxJ = floor((height - 120) / paso);
-  let minI = floor(90 / paso);
-  let maxI = floor((width - 90) / paso);
+  if (!reachableIndices || reachableIndices.length === 0) {
+    portalX = width / 2;
+    portalY = height / 3;
+    portalEdgeX = portalX;
+    portalEdgeY = portalY;
+    portalEdgePoints = [];
+    return;
+  }
 
-  let minBallDist = max(130, min(width, height) * 0.25);
+  // 2. Mapa de distancia a los bordes reales del fractal
+  let edgeInfo = computeFractalEdgeDistanceGrid();
 
-  // Niveles de holgura decreciente para garantizar SIEMPRE encontrar un punto alcanzable
-  let clearanceLevels = [portalR * 0.75, portalR * 0.5, PARAMS.ball.ballR * 0.75];
+  // Márgenes del canvas ajustados para no descartar bordes cercanos a la ventana
+  let minI = floor(25 / paso);
+  let maxI = floor((width - 25) / paso);
+  let minJ = floor(30 / paso);
+  let maxJ = floor((height - 45) / paso);
 
-  for (let cl = 0; cl < clearanceLevels.length; cl++) {
-    let reqClear = clearanceLevels[cl];
-    let candidates = [];
+  let minBallDist = max(70, min(width, height) * 0.16);
+  let ballR = PARAMS.ball.ballR;
+
+  if (edgeInfo) {
+    let distGrid = edgeInfo.distGrid;
+    let nearestEdge = edgeInfo.nearestEdge;
+
+    // TIER 1: Óptimo - Estrictamente adherido al borde del fractal (11px a 30px)
+    let candidatesTier1 = [];
+    let minEdgeDist1 = max(11, ballR * 0.85);
+    let maxEdgeDist1 = targetEdgeDist + 12; // 18 + 12 = 30px
 
     for (let idx of reachableIndices) {
       let i = idx % cols;
       let j = floor(idx / cols);
 
       if (i >= minI && i <= maxI && j >= minJ && j <= maxJ) {
-        let px = i * paso + paso / 2;
-        let py = j * paso + paso / 2;
-        let d = dist(px, py, ballX, ballY);
+        let dSteps = distGrid[idx];
+        if (dSteps >= 0) {
+          let dEdge = dSteps * paso;
+          if (dEdge >= minEdgeDist1 && dEdge <= maxEdgeDist1) {
+            let px = i * paso + paso / 2;
+            let py = j * paso + paso / 2;
+            let dBall = dist(px, py, ballX, ballY);
 
-        if (d >= minBallDist) {
-          if (isCircleInsideSet(px, py, reqClear)) {
-            let isNearBorder = false;
-            let checkOffsets = [-2, -1, 1, 2];
-            for (let od of checkOffsets) {
-              if (!isInsideSet(px + od * paso, py) || !isInsideSet(px, py + od * paso)) {
-                isNearBorder = true;
-                break;
+            if (dBall >= minBallDist) {
+              if (isCircleInsideSet(px, py, minEdgeDist1 * 0.75)) {
+                let diff = Math.abs(dEdge - targetEdgeDist);
+                candidatesTier1.push({
+                  x: px,
+                  y: py,
+                  idx: idx,
+                  dEdge: dEdge,
+                  diff: diff,
+                  dBall: dBall,
+                });
               }
             }
-            candidates.push({ x: px, y: py, dist: d, nearBorder: isNearBorder });
           }
         }
       }
     }
 
-    if (candidates.length > 0) {
-      candidates.sort((a, b) => (b.nearBorder ? 1 : 0) - (a.nearBorder ? 1 : 0) || b.dist - a.dist);
-      let topCount = min(candidates.length, 6);
-      let chosen = candidates[floor(random(topCount))];
+    if (candidatesTier1.length > 0) {
+      candidatesTier1.sort((a, b) => a.diff - b.diff || b.dBall - a.dBall);
+      let topCount = min(candidatesTier1.length, 8);
+      let chosen = candidatesTier1[floor(random(topCount))];
       portalX = chosen.x;
       portalY = chosen.y;
+
+      let edgeIdx = nearestEdge[chosen.idx];
+      if (edgeIdx >= 0) {
+        portalEdgeX = (edgeIdx % cols) * paso + paso / 2;
+        portalEdgeY = floor(edgeIdx / cols) * paso + paso / 2;
+      }
+      collectNearbyEdgePoints(distGrid);
+      return;
+    }
+
+    // TIER 2: En espacios más reducidos, permitir margen de hasta 42px
+    let candidatesTier2 = [];
+    let minBallDist2 = max(35, min(width, height) * 0.08);
+    let minEdgeDist2 = max(8, ballR * 0.65);
+    let maxEdgeDist2 = targetEdgeDist + 24; // 18 + 24 = 42px
+
+    for (let idx of reachableIndices) {
+      let i = idx % cols;
+      let j = floor(idx / cols);
+
+      if (i >= minI && i <= maxI && j >= minJ && j <= maxJ) {
+        let dSteps = distGrid[idx];
+        if (dSteps >= 0) {
+          let dEdge = dSteps * paso;
+          if (dEdge >= minEdgeDist2 && dEdge <= maxEdgeDist2) {
+            let px = i * paso + paso / 2;
+            let py = j * paso + paso / 2;
+            let dBall = dist(px, py, ballX, ballY);
+
+            if (dBall >= minBallDist2) {
+              if (isCircleInsideSet(px, py, minEdgeDist2 * 0.75)) {
+                let diff = Math.abs(dEdge - targetEdgeDist);
+                candidatesTier2.push({
+                  x: px,
+                  y: py,
+                  idx: idx,
+                  dEdge: dEdge,
+                  diff: diff,
+                  dBall: dBall,
+                });
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (candidatesTier2.length > 0) {
+      candidatesTier2.sort((a, b) => a.diff - b.diff || b.dBall - a.dBall);
+      let topCount = min(candidatesTier2.length, 6);
+      let chosen = candidatesTier2[floor(random(topCount))];
+      portalX = chosen.x;
+      portalY = chosen.y;
+
+      let edgeIdx = nearestEdge[chosen.idx];
+      if (edgeIdx >= 0) {
+        portalEdgeX = (edgeIdx % cols) * paso + paso / 2;
+        portalEdgeY = floor(edgeIdx / cols) * paso + paso / 2;
+      }
+      collectNearbyEdgePoints(distGrid);
+      return;
+    }
+
+    // TIER 3: Buscar la celda con la menor distancia a la muralla fractal
+    let bestCandidate = null;
+    let minSeenEdge = Infinity;
+
+    for (let idx of reachableIndices) {
+      let i = idx % cols;
+      let j = floor(idx / cols);
+      if (i >= minI && i <= maxI && j >= minJ && j <= maxJ) {
+        let dSteps = distGrid[idx];
+        if (dSteps >= 0) {
+          let dEdge = dSteps * paso;
+          let px = i * paso + paso / 2;
+          let py = j * paso + paso / 2;
+          if (isInsideSet(px, py)) {
+            if (dEdge < minSeenEdge) {
+              minSeenEdge = dEdge;
+              bestCandidate = { x: px, y: py, idx: idx };
+            }
+          }
+        }
+      }
+    }
+
+    if (bestCandidate) {
+      portalX = bestCandidate.x;
+      portalY = bestCandidate.y;
+      let edgeIdx = nearestEdge[bestCandidate.idx];
+      if (edgeIdx >= 0) {
+        portalEdgeX = (edgeIdx % cols) * paso + paso / 2;
+        portalEdgeY = floor(edgeIdx / cols) * paso + paso / 2;
+      }
+      collectNearbyEdgePoints(distGrid);
       return;
     }
   }
 
-  // Si el espacio es más compacto, buscar el punto alcanzable más lejano de la pelota
-  let bestReachable = null;
-  let maxDist = -1;
-
+  // TIER 4: Fallback de seguridad absoluta garantizando la celda más próxima al borde
+  let bestIdx = reachableIndices[0];
+  let minSteps = Infinity;
   for (let idx of reachableIndices) {
-    let i = idx % cols;
-    let j = floor(idx / cols);
-    let px = i * paso + paso / 2;
-    let py = j * paso + paso / 2;
-    let d = dist(px, py, ballX, ballY);
-
-    if (d > maxDist && isCircleInsideSet(px, py, PARAMS.ball.ballR * 0.6)) {
-      maxDist = d;
-      bestReachable = { x: px, y: py };
+    if (distGrid && distGrid[idx] >= 0 && distGrid[idx] < minSteps) {
+      minSteps = distGrid[idx];
+      bestIdx = idx;
     }
   }
-
-  if (bestReachable) {
-    portalX = bestReachable.x;
-    portalY = bestReachable.y;
-    return;
-  }
-
-  // Garantía matemática absoluta: punto accesible más lejano del BFS
-  let lastIdx = reachableIndices[reachableIndices.length - 1];
-  let li = lastIdx % cols;
-  let lj = floor(lastIdx / cols);
+  let li = bestIdx % cols;
+  let lj = floor(bestIdx / cols);
   portalX = li * paso + paso / 2;
   portalY = lj * paso + paso / 2;
+  let edgeIdx = (nearestEdge && nearestEdge[bestIdx] >= 0) ? nearestEdge[bestIdx] : bestIdx;
+  portalEdgeX = (edgeIdx % cols) * paso + paso / 2;
+  portalEdgeY = floor(edgeIdx / cols) * paso + paso / 2;
+  collectNearbyEdgePoints(distGrid);
 }
 
 function drawPortal() {
   let portalR = PARAMS.portal.portalR;
-  let pulse = sin(frameCount * 0.12);
   let pal = PALETTES[PARAMS.fractal.palette] || PALETTES.cyberpunk;
 
   // Reacción interactiva a la cercanía de la pelota
   let d = dist(ballX, ballY, portalX, portalY);
   let proximity = constrain(map(d, 220, 35, 0, 1), 0, 1);
+  let pulse = sin(frameCount * 0.12);
+  let fastPulse = sin(frameCount * 0.24);
 
   push();
-  translate(portalX, portalY);
+
+  // 1. MANTO LUMINOSO Y ARCOS DE PLASMA ANCLADOS A LA PARED DEL FRACTAL
+  if (portalEdgePoints && portalEdgePoints.length > 0) {
+    // Halo de fusión / manto en la pared del fractal
+    noStroke();
+    for (let k = 0; k < min(portalEdgePoints.length, 6); k++) {
+      let pt = portalEdgePoints[k];
+      let pGlow = sin(frameCount * 0.15 + k * 0.7) * 0.5 + 0.5;
+      fill(pal.edgeGlow[0], pal.edgeGlow[1], pal.edgeGlow[2], 30 + pGlow * 40 + proximity * 30);
+      circle(pt.x, pt.y, 16 + pGlow * 10);
+      fill(pal.edgeCol[0], pal.edgeCol[1], pal.edgeCol[2], 120 + pGlow * 100);
+      circle(pt.x, pt.y, 5 + pGlow * 4);
+    }
+
+    // Rayos / Arcos de plasma orgánicos crepitando hacia la pared
+    let numArcs = 3 + floor(proximity * 2);
+    for (let a = 0; a < numArcs; a++) {
+      let targetPt = portalEdgePoints[a % portalEdgePoints.length];
+      let arcNoise = noise(frameCount * 0.12 + a * 10) * 16 - 8;
+      let arcPulse = sin(frameCount * 0.2 + a * 1.5) * 0.5 + 0.5;
+
+      stroke(pal.edgeCol[0], pal.edgeCol[1], pal.edgeCol[2], 100 + arcPulse * 120);
+      strokeWeight(1.2 + arcPulse * 1.2 + proximity * 0.8);
+      noFill();
+
+      let mx1 = lerp(portalX, targetPt.x, 0.35) + arcNoise;
+      let my1 = lerp(portalY, targetPt.y, 0.35) - arcNoise * 0.7;
+      let mx2 = lerp(portalX, targetPt.x, 0.7) - arcNoise * 0.6;
+      let my2 = lerp(portalY, targetPt.y, 0.7) + arcNoise * 0.8;
+
+      bezier(portalX, portalY, mx1, my1, mx2, my2, targetPt.x, targetPt.y);
+    }
+  } else if (portalEdgeX !== undefined && portalEdgeY !== undefined) {
+    let tPulse = sin(frameCount * 0.15) * 0.5 + 0.5;
+    stroke(pal.edgeCol[0], pal.edgeCol[1], pal.edgeCol[2], 120 + tPulse * 100);
+    strokeWeight(1.8);
+    noFill();
+    let mx = (portalX + portalEdgeX) * 0.5 + sin(frameCount * 0.2) * 8;
+    let my = (portalY + portalEdgeY) * 0.5 + cos(frameCount * 0.2) * 8;
+    bezier(portalX, portalY, mx, my, mx, my, portalEdgeX, portalEdgeY);
+  }
+
+  // 2. PARTÍCULAS DE ACRECIÓN (Fluido de energía succionado desde la pared hacia el centro del portal)
+  updateAndDrawPortalParticles(pal, proximity);
+
+  // 3. ONDAS GRAVITACIONALES EXPANSIVAS
+  let waveProgress = (frameCount * 0.025) % 1;
+  let waveR = portalR + waveProgress * 38;
   noFill();
+  stroke(pal.edgeCol[0], pal.edgeCol[1], pal.edgeCol[2], (1 - waveProgress) * 75);
+  strokeWeight(1.5);
+  circle(portalX, portalY, waveR * 2);
 
-  // Halo atractor luminoso cuando la pelota se aproxima
-  if (proximity > 0) {
-    stroke(pal.edgeCol[0], pal.edgeCol[1], pal.edgeCol[2], proximity * 80);
-    strokeWeight(1.5);
-    circle(0, 0, (portalR * 2 + 25 + pulse * 8) * (1 + proximity * 0.25));
-  }
+  translate(portalX, portalY);
 
+  // 4. DISCO DE ACRECIÓN Y HALO EXTERNO CON GLOW PROFUNDO
+  let haloR = portalR * 2 + 20 + pulse * 6 + proximity * 14;
+  noStroke();
+  fill(pal.edgeGlow[0], pal.edgeGlow[1], pal.edgeGlow[2], 25 + proximity * 30);
+  circle(0, 0, haloR * 1.5);
+  fill(pal.edgeCol[0], pal.edgeCol[1], pal.edgeCol[2], 40 + proximity * 35);
+  circle(0, 0, haloR);
+
+  // Anillos concéntricos resonantes
+  noFill();
   for (let k = 3; k > 0; k--) {
-    stroke(pal.edgeCol[0], pal.edgeCol[1], pal.edgeCol[2], 50 + 55 * k + proximity * 60);
-    strokeWeight(k * (1.6 + proximity * 0.4));
-    circle(0, 0, portalR * 2 + k * 8 + pulse * 6);
+    let rRing = portalR * 2 + k * 9 + pulse * (4 + k);
+    stroke(pal.edgeCol[0], pal.edgeCol[1], pal.edgeCol[2], 60 + 55 * k + proximity * 60);
+    strokeWeight(k * (1.4 + proximity * 0.4));
+    circle(0, 0, rRing);
   }
 
-  rotate(frameCount * (0.05 + proximity * 0.05));
-  stroke(pal.edgeGlow[0], pal.edgeGlow[1], pal.edgeGlow[2]);
-  strokeWeight(2.5 + proximity * 1.5);
+  // 5. VÓRTICE GIRATORIO CON ASPAS DE ENERGÍA
+  push();
+  rotate(frameCount * (0.04 + proximity * 0.06));
+  stroke(pal.edgeGlow[0], pal.edgeGlow[1], pal.edgeGlow[2], 230);
+  strokeWeight(2.8 + proximity * 1.4);
   for (let a = 0; a < TWO_PI; a += HALF_PI) {
-    arc(0, 0, portalR * 1.3, portalR * 1.3, a, a + 1);
+    arc(0, 0, portalR * 1.5, portalR * 1.5, a, a + 1.15);
   }
+  pop();
+
+  // Contravórtice interno rápido
+  push();
+  rotate(-frameCount * (0.07 + proximity * 0.09));
+  stroke(pal.edgeCol[0], pal.edgeCol[1], pal.edgeCol[2], 200 + proximity * 55);
+  strokeWeight(2);
+  for (let a = 0; a < TWO_PI; a += PI / 3) {
+    arc(0, 0, portalR * 1.1, portalR * 1.1, a, a + 0.65);
+  }
+  pop();
+
+  // 6. SINGULARIDAD CENTRAL / HORIZONTE DE SUCESOS
+  // Corona blanca pura incandescente
+  noFill();
+  stroke(255, 255, 255, 220 + fastPulse * 35);
+  strokeWeight(2.2);
+  circle(0, 0, portalR * 0.85);
+
+  // Núcleo del agujero de gusano (negro abisal profundo que devora la luz)
+  noStroke();
+  fill(4, 3, 10, 240);
+  circle(0, 0, portalR * 0.75);
+
+  // Micro-fulgor central
+  fill(255, 255, 255, 140 + pulse * 80);
+  circle(0, 0, 4 + fastPulse * 3);
+
   pop();
 }
 
@@ -818,11 +1233,14 @@ function checkPortal() {
   if (dist(ballX, ballY, portalX, portalY) < triggerDist) {
     state = "entrando";
     diveT = 0;
+    // Apuntar el zoom al borde real del fractal donde está anclado el portal
+    let targetX = (typeof portalEdgeX !== "undefined" && portalEdgeX !== null) ? portalEdgeX : portalX;
+    let targetY = (typeof portalEdgeY !== "undefined" && portalEdgeY !== null) ? portalEdgeY : portalY;
     dive = {
       fromX: viewX,
       fromY: viewY,
-      toX: viewX + (portalX - width / 2) * viewScale,
-      toY: viewY + (portalY - height / 2) * viewScale,
+      toX: viewX + (targetX - width / 2) * viewScale,
+      toY: viewY + (targetY - height / 2) * viewScale,
       fromScale: viewScale,
       fromIter: maxIterations,
       toIter: iterCapForLevel(level + 1),
@@ -1313,13 +1731,13 @@ const GROUP_LABELS = {
 
 const PARAM_DEFS = [
   { group: "fractal", key: "paso", label: "Resolución (paso)", min: 1, max: 8, step: 1,
-    onChange: function () { resizeFractalBuffers(); computeFractal(); } },
+    onChange: function () { resizeFractalBuffers(); computeFractal(); pickPortal(); } },
   { group: "fractal", key: "maxIterBase", label: "Iteraciones base", min: 15, max: 120, step: 5,
-    onChange: function () { maxIterations = iterCapForLevel(level); computeFractal(); } },
+    onChange: function () { maxIterations = iterCapForLevel(level); computeFractal(); pickPortal(); } },
   { group: "fractal", key: "maxIterPerLevel", label: "Iteraciones x nivel", min: 0, max: 60, step: 5 },
   { group: "fractal", key: "maxIterCap", label: "Tope de iteraciones", min: 60, max: 400, step: 10 },
   { group: "fractal", key: "solidThreshold", label: "Umbral zona oscura", min: 0.5, max: 0.95, step: 0.05,
-    onChange: function () { computeFractal(); } },
+    onChange: function () { computeFractal(); pickPortal(); } },
 
   { group: "zoom", key: "zoomPerLevel", label: "Zoom por portal", min: 5, max: 200, step: 5 },
   { group: "zoom", key: "diveFrames", label: "Duración zambullida", min: 40, max: 400, step: 10 },
@@ -1336,7 +1754,10 @@ const PARAM_DEFS = [
 
   { group: "racket", key: "batR", label: "Radio raqueta", min: 14, max: 50, step: 1 },
 
-  { group: "portal", key: "portalR", label: "Radio portal", min: 12, max: 50, step: 1 },
+  { group: "portal", key: "portalR", label: "Radio portal", min: 12, max: 50, step: 1,
+    onChange: function () { pickPortal(); } },
+  { group: "portal", key: "edgeDistance", label: "Distancia al borde", min: 10, max: 60, step: 1,
+    onChange: function () { pickPortal(); } },
 
   { group: "game", key: "finalLevel", label: "Nivel final", min: 1, max: 12, step: 1 },
   { group: "game", key: "startLives", label: "Vidas iniciales", min: 1, max: 9, step: 1 },
